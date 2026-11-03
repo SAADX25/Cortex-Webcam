@@ -11,21 +11,30 @@
 
 namespace cortex {
 struct RtpStats {
-    uint64_t packets{}, rejected{}, late{}, gaps{}, accessUnits{}, dropped{},markers{};
-    std::array<uint64_t,24> nalTypes{};
+    uint64_t packets{}, rejected{}, late{}, gaps{}, accessUnits{}, dropped{}, markers{};
+    std::array<uint64_t, 24> nalTypes{};
 };
 
 // One instance per source, single-thread owned. RFC 6184 mode 1.
 class H264RtpReceiver {
 public:
     using Sink = std::function<void(EncodedAccessUnit)>;
-    explicit H264RtpReceiver(Sink sink, std::chrono::milliseconds reorder = std::chrono::milliseconds(8));
+    explicit H264RtpReceiver(Sink sink,
+                             std::chrono::milliseconds reorder = std::chrono::milliseconds(8));
     void push(std::span<const uint8_t> datagram, Clock::time_point now);
     void tick(Clock::time_point now);
     void discardUntilIdr() { lose(); }
     RtpStats stats() const { return stats_; }
+
 private:
-    struct Packet { uint16_t sequence; uint32_t timestamp, ssrc; bool marker; std::vector<uint8_t> payload; Clock::time_point arrival; int rotation{}; };
+    struct Packet {
+        uint16_t sequence;
+        uint32_t timestamp, ssrc;
+        bool marker;
+        std::vector<uint8_t> payload;
+        Clock::time_point arrival;
+        int rotation{};
+    };
     static std::optional<Packet> parse(std::span<const uint8_t>, Clock::time_point);
     void drain(Clock::time_point now);
     void consume(const Packet&);
@@ -44,4 +53,4 @@ private:
     bool damaged_{}, waitingIdr_{true}, idr_{}, hasVcl_{}, reset_{true};
     RtpStats stats_;
 };
-}
+}  // namespace cortex

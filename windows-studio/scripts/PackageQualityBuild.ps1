@@ -1,7 +1,9 @@
 param(
     [string]$CrtDirectory='C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.51.36231\x64\Microsoft.VC145.CRT',
     [switch]$Desktop,
-    [string]$PackageName=''
+    [switch]$WindowsOnly,
+    [string]$PackageName='',
+    [string]$CubismSdkRoot
 )
 $ErrorActionPreference='Stop'
 $studio=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -21,6 +23,12 @@ if($Desktop){
 }else{
     Copy-Item -LiteralPath (Join-Path $release 'cortex-receive.exe') -Destination (Join-Path $package 'CortexStudio.exe')
 }
+if ($CubismSdkRoot) {
+    $shaderSource = Join-Path $CubismSdkRoot 'Framework/src/Rendering/D3D11/Shaders'
+    if (!(Test-Path -LiteralPath $shaderSource -PathType Container)) { throw "Missing Cubism D3D11 shaders: $shaderSource" }
+    $shaderTarget = New-Item -ItemType Directory -Path (Join-Path $package 'FrameworkShaders') -Force
+    Get-ChildItem -LiteralPath $shaderSource | Copy-Item -Destination $shaderTarget.FullName -Recurse -Force
+}
 # Include only FFmpeg components used by this pipeline and the required GPU AI runtimes.
 foreach($name in @('avcodec-63.dll','avformat-63.dll','avutil-61.dll','swresample-7.dll','onnxruntime.dll','onnxruntime_providers_shared.dll','DirectML.dll')){
     Copy-Item -LiteralPath (Join-Path $release $name) -Destination $package
@@ -30,7 +38,11 @@ Copy-Item -LiteralPath (Join-Path $studio '.deps\onnx\rvm_mobilenetv3_fp32.onnx'
 Copy-Item -LiteralPath (Join-Path $studio 'scripts\InstallVirtualCamera.ps1') -Destination "$package\scripts"
 Copy-Item -LiteralPath (Join-Path $studio 'scripts\EnablePhoneConnection.ps1') -Destination "$package\scripts"
 foreach($architecture in @('32','64')){
-    Copy-Item -LiteralPath (Join-Path $studio "third_party\unitycapture\Install\UnityCaptureFilter$architecture.dll") -Destination "$package\third_party\unitycapture\Install"
+    $src = Join-Path $studio "third_party\unitycapture\Install\UnityCaptureFilter$architecture.dll"
+    $dest = "$package\third_party\unitycapture\Install\UnityCaptureFilter$architecture.dll"
+    if (!(Test-Path $dest) -or (Get-FileHash -LiteralPath $src).Hash -ne (Get-FileHash -LiteralPath $dest).Hash) {
+        try { Copy-Item -LiteralPath $src -Destination $dest -Force } catch { Write-Warning "Skipped locked $dest" }
+    }
 }
 $licenseFiles=@{
     'FFmpeg-GPL.txt'='.deps\ffmpeg-9.0.2-full_build-shared\LICENSE'
@@ -125,7 +137,7 @@ Cortex Webcam — نسخة اختبار الجودة
 هذه نسخة اختبار محلية: EXE غير موقّع بشهادة نشر، وAPK موقّعة بمفتاح تطوير وغير قابلة للتصحيح.
 الواجهة الرسومية والتقاط كاميرا USB الفعلية ليسا ضمن هذه النسخة؛ اختبار الفيديو هنا من هاتف أندرويد.
 المتطلبات الواقعية هي GPU يدعم D3D11 video decode، وD3D12/DirectML عند تشغيل AI.
-'@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8BOM
+'@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8
 if($Desktop){
 @'
 Cortex Studio Desktop 0.6 — خلفية مستقرة وتصوير طولي/عرضي
@@ -181,15 +193,16 @@ Cortex Studio Desktop 0.6 — خلفية مستقرة وتصوير طولي/عر
 AI قد يكون أبطأ من 30fps حسب GPU؛ ابدأ باختبار Original.
 هذه النسخة تدعم مصدر الهاتف؛ مصدر USB الفعلي ليس مدمجًا بعد، ولا توجد أزرار وهمية تدّعي دعمه.
 يمكن استخدام CortexReceiver-CLI.exe فقط للتشخيص؛ التشغيل العادي هو CortexStudio.exe.
-'@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8BOM
+'@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8
 }
 
 $apk=Join-Path $workspace 'android-sender\app\build\outputs\apk\quality\app-quality.apk'
-Copy-Item -LiteralPath $apk -Destination "$dist\CortexSender-Android.apk"
+if (!$WindowsOnly) { Copy-Item -LiteralPath $apk -Destination "$dist\CortexSender-Android.apk" }
 Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
     $relative=$_.FullName.Substring($package.Length+1)
     "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
 } | Set-Content -LiteralPath "$package\SHA256SUMS.txt" -Encoding utf8
 Compress-Archive -LiteralPath $package -DestinationPath "$dist\$packageName.zip" -CompressionLevel Optimal -Force
-Get-Item -LiteralPath "$dist\$packageName.zip","$dist\CortexSender-Android.apk" | Select-Object FullName,Length
+Get-Item -LiteralPath "$dist\$packageName.zip" | Select-Object FullName,Length
+if (!$WindowsOnly) { Get-Item -LiteralPath "$dist\CortexSender-Android.apk" | Select-Object FullName,Length }
 

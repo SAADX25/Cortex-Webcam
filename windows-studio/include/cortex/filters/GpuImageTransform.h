@@ -6,8 +6,10 @@ class GpuImageTransform {
 public:
     explicit GpuImageTransform(std::shared_ptr<GpuDevice>);
     ~GpuImageTransform();
-    GpuImage rotate(const GpuImage&,int clockwiseDegrees);
+    GpuImage rotate(const GpuImage&, int clockwiseDegrees);
+
 private:
-    struct Impl;std::unique_ptr<Impl> impl_;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
-}
+}  // namespace cortex

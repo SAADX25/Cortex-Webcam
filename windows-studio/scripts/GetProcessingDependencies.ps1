@@ -1,4 +1,4 @@
-param()
+param([string]$CubismSdkRoot)
 $ErrorActionPreference='Stop'
 $root=Join-Path $PSScriptRoot '..\.deps\onnx'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -16,3 +16,11 @@ $model=Fetch 'https://github.com/PeterL1n/RobustVideoMatting/releases/download/v
 Expand-Archive -LiteralPath $ort -DestinationPath (Join-Path $root 'runtime') -Force
 Expand-Archive -LiteralPath $dml -DestinationPath (Join-Path $root 'directml') -Force
 Write-Output "Dependencies ready. Configure CMake with ONNXRUNTIME_ROOT=$root/runtime and DIRECTML_ROOT=$root/directml. Model: $model"
+
+if ($CubismSdkRoot) {
+    $sdk = (Resolve-Path -LiteralPath $CubismSdkRoot).Path
+    foreach ($required in 'Core/include/Live2DCubismCore.h','Framework/CMakeLists.txt','Framework/src/Rendering/D3D11/Shaders') {
+        if (!(Test-Path -LiteralPath (Join-Path $sdk $required))) { throw "Incomplete Cubism SDK: missing $required" }
+    }
+    Write-Output "Cubism SDK located. Configure with -DCUBISM_SDK_ROOT=`"$sdk`" and the DirectXTK package toolchain."
+}

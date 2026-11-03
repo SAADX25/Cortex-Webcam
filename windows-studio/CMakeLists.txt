@@ -41,7 +41,7 @@ if(CORTEX_BUILD_RECEIVER)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS shaders/pipeline.hlsl)
     configure_file(shaders/ShaderSource.h.in generated/ShaderSource.generated.h @ONLY)
     add_library(cortex_processing
-        src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
+        src/filters/AvatarFilter.cpp src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
         src/filters/RvmMatting.cpp src/filters/BackgroundVideo.cpp src/output/UnityCameraOutput.cpp)
     target_include_directories(cortex_processing PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" third_party/unitycapture)
     target_include_directories(cortex_processing SYSTEM PRIVATE "${FFMPEG_INCLUDE}")
@@ -57,6 +57,27 @@ if(CORTEX_BUILD_RECEIVER)
         target_link_libraries(cortex_processing PRIVATE "${ONNXRUNTIME_ROOT}/runtimes/win-x64/native/onnxruntime.lib")
         file(GLOB ORT_DLLS "${ONNXRUNTIME_ROOT}/runtimes/win-x64/native/*.dll")
         list(APPEND ORT_DLLS "${DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
+    endif()
+    set(CUBISM_SDK_ROOT "" CACHE PATH "Extracted Cubism Native SDK with Core and Framework")
+    if(CUBISM_SDK_ROOT AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+        find_package(directxtk CONFIG QUIET)
+        find_library(CUBISM_CORE_RELEASE NAMES Live2DCubismCore_MD
+            PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
+        find_library(CUBISM_CORE_DEBUG NAMES Live2DCubismCore_MDd
+            PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
+    endif()
+    if(CUBISM_SDK_ROOT AND TARGET Microsoft::DirectXTK AND CUBISM_CORE_RELEASE AND CUBISM_CORE_DEBUG
+       AND EXISTS "${CUBISM_SDK_ROOT}/Core/include/Live2DCubismCore.h"
+       AND EXISTS "${CUBISM_SDK_ROOT}/Framework/CMakeLists.txt")
+        set(FRAMEWORK_SOURCE D3D11)
+        add_subdirectory("${CUBISM_SDK_ROOT}/Framework" "${CMAKE_CURRENT_BINARY_DIR}/CubismFramework")
+        target_include_directories(Framework PUBLIC "${CUBISM_SDK_ROOT}/Core/include")
+        target_link_libraries(Framework PRIVATE Microsoft::DirectXTK d3d11 d3dcompiler
+            optimized "${CUBISM_CORE_RELEASE}" debug "${CUBISM_CORE_DEBUG}")
+        target_link_libraries(cortex_processing PRIVATE Framework)
+        target_compile_definitions(cortex_processing PUBLIC CORTEX_HAS_CUBISM)
+    elseif(CUBISM_SDK_ROOT)
+        message(STATUS "Cubism dependencies incomplete; using built-in avatar")
     endif()
     target_link_libraries(cortex-receive PRIVATE cortex_processing)
     add_library(CortexStudioNative SHARED src/ui/StudioBridge.cpp)

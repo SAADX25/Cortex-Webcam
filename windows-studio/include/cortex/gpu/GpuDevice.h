@@ -14,4 +14,4 @@ public:
     // Every module issuing immediate-context work must use this recursive lock.
     std::recursive_mutex mutex;
 };
-}
+}  // namespace cortex

@@ -9,7 +9,7 @@ namespace cortex {
 struct VideoFrame {
     ComPtr<ID3D11Texture2D> texture;
     UINT arraySlice{};
-    uint32_t width{},height{}; // Visible size, not padded texture dimensions.
+    uint32_t width{}, height{};  // Visible size, not padded texture dimensions.
     int64_t sourceTimestamp90k{};
     int rotationDegrees{};
     std::chrono::steady_clock::time_point receivedAt;
@@ -20,5 +20,5 @@ struct VideoFrame {
     std::shared_ptr<void> backingOwner;
     std::shared_ptr<GpuDevice> gpu;
 };
-using FramePtr=std::shared_ptr<const VideoFrame>;
-}
+using FramePtr = std::shared_ptr<const VideoFrame>;
+}  // namespace cortex

@@ -1,0 +1,77 @@
+diff --git a/scripts/PackageQualityBuild.ps1 b/scripts/PackageQualityBuild.ps1
+index 8e8c2ae..b4b4e9c 100644
+--- a/scripts/PackageQualityBuild.ps1
++++ b/scripts/PackageQualityBuild.ps1	
+@@ -1,7 +1,8 @@
+ param(
+     [string]$CrtDirectory='C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.51.36231\x64\Microsoft.VC145.CRT',
+     [switch]$Desktop,
+-    [string]$PackageName=''
++    [string]$PackageName='',
++    [string]$CubismSdkRoot
+ )
+ $ErrorActionPreference='Stop'
+ $studio=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+@@ -21,6 +22,12 @@ if($Desktop){
+ }else{
+     Copy-Item -LiteralPath (Join-Path $release 'cortex-receive.exe') -Destination (Join-Path $package 'CortexStudio.exe')
+ }
++if ($CubismSdkRoot) {
++    $shaderSource = Join-Path $CubismSdkRoot 'Framework/src/Rendering/D3D11/Shaders'
++    if (!(Test-Path -LiteralPath $shaderSource -PathType Container)) { throw "Missing Cubism D3D11 shaders: $shaderSource" }
++    $shaderTarget = New-Item -ItemType Directory -Path (Join-Path $package 'FrameworkShaders') -Force
++    Get-ChildItem -LiteralPath $shaderSource | Copy-Item -Destination $shaderTarget.FullName -Recurse -Force
++}
+ # Include only FFmpeg components used by this pipeline and the required GPU AI runtimes.
+ foreach($name in @('avcodec-63.dll','avformat-63.dll','avutil-61.dll','swresample-7.dll','onnxruntime.dll','onnxruntime_providers_shared.dll','DirectML.dll')){
+     Copy-Item -LiteralPath (Join-Path $release $name) -Destination $package
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 0371654..b3d14ea 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt	
+@@ -58,6 +58,23 @@ if(CORTEX_BUILD_RECEIVER)
+         file(GLOB ORT_DLLS "${ONNXRUNTIME_ROOT}/runtimes/win-x64/native/*.dll")
+         list(APPEND ORT_DLLS "${DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
+     endif()
++    set(CUBISM_SDK_ROOT "" CACHE PATH "Extracted Cubism Native SDK with Core and Framework")
++    if(CUBISM_SDK_ROOT)
++        if(NOT ONNXRUNTIME_ROOT OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
++            message(FATAL_ERROR "Avatar builds require ONNXRUNTIME_ROOT and MSVC x64")
++        endif()
++        find_package(directxtk CONFIG REQUIRED)
++        find_library(CUBISM_CORE_RELEASE NAMES Live2DCubismCore_MD REQUIRED
++            PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
++        find_library(CUBISM_CORE_DEBUG NAMES Live2DCubismCore_MDd REQUIRED
++            PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
++        set(FRAMEWORK_SOURCE D3D11)
++        add_subdirectory("${CUBISM_SDK_ROOT}/Framework" "${CMAKE_CURRENT_BINARY_DIR}/CubismFramework")
++        target_include_directories(Framework PUBLIC "${CUBISM_SDK_ROOT}/Core/include")
++        target_link_libraries(Framework PRIVATE Microsoft::DirectXTK d3d11 d3dcompiler
++            optimized "${CUBISM_CORE_RELEASE}" debug "${CUBISM_CORE_DEBUG}")
++        target_link_libraries(cortex_processing PRIVATE Framework)
++    endif()
+     target_link_libraries(cortex-receive PRIVATE cortex_processing)
+     add_library(CortexStudioNative SHARED src/ui/StudioBridge.cpp)
+     target_compile_definitions(CortexStudioNative PRIVATE CORTEX_STUDIO_NATIVE_BUILD)
+diff --git a/scripts/GetProcessingDependencies.ps1 b/scripts/GetProcessingDependencies.ps1
+index 6e2817b..c5a7f02 100644
+--- a/scripts/GetProcessingDependencies.ps1
++++ b/scripts/GetProcessingDependencies.ps1	
+@@ -1,4 +1,4 @@
+-param()
++param([string]$CubismSdkRoot)
+ $ErrorActionPreference='Stop'
+ $root=Join-Path $PSScriptRoot '..\.deps\onnx'
+ New-Item -ItemType Directory -Path $root -Force | Out-Null
+@@ -16,3 +16,11 @@ $model=Fetch 'https://github.com/PeterL1n/RobustVideoMatting/releases/download/v
+ Expand-Archive -LiteralPath $ort -DestinationPath (Join-Path $root 'runtime') -Force
+ Expand-Archive -LiteralPath $dml -DestinationPath (Join-Path $root 'directml') -Force
+ Write-Output "Dependencies ready. Configure CMake with ONNXRUNTIME_ROOT=$root/runtime and DIRECTML_ROOT=$root/directml. Model: $model"
++
++if ($CubismSdkRoot) {
++    $sdk = (Resolve-Path -LiteralPath $CubismSdkRoot).Path
++    foreach ($required in 'Core/include/Live2DCubismCore.h','Framework/CMakeLists.txt','Framework/src/Rendering/D3D11/Shaders') {
++        if (!(Test-Path -LiteralPath (Join-Path $sdk $required))) { throw "Incomplete Cubism SDK: missing $required" }
++    }
++    Write-Output "Cubism SDK located. Configure with -DCUBISM_SDK_ROOT=`"$sdk`" and the DirectXTK package toolchain."
++}

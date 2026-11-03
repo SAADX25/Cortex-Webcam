@@ -8,12 +8,13 @@ namespace cortex {
 struct UdpSourceConfig {
     uint16_t port{5004};
     std::string bindAddress{"0.0.0.0"};
-    std::string senderAddress; // Optional numeric IPv4 allowlist. No hostname lookup on receive path.
+    std::string
+        senderAddress;  // Optional numeric IPv4 allowlist. No hostname lookup on receive path.
     std::chrono::milliseconds reorderWindow{8};
 };
-class UdpH264Source final:public IVideoSource {
+class UdpH264Source final : public IVideoSource {
 public:
-    UdpH264Source(std::shared_ptr<GpuDevice>,UdpSourceConfig={});
+    UdpH264Source(std::shared_ptr<GpuDevice>, UdpSourceConfig = {});
     ~UdpH264Source() override;
     void start() override;
     void stop() noexcept override;
@@ -21,6 +22,7 @@ public:
     SourceStatus status() const override;
     void setAutoPeer(const std::string& numericIpv4);
     std::shared_ptr<GpuDevice> gpuDevice() const override { return gpu_; }
+
 private:
     void run() noexcept;
     std::shared_ptr<GpuDevice> gpu_;
@@ -34,4 +36,4 @@ private:
     std::atomic<uint32_t> autoPeer_{0};
     std::thread worker_;
 };
-}
+}  // namespace cortex

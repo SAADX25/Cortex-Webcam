@@ -319,6 +319,30 @@
               <TabItem Header="Appearance">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                   <StackPanel Margin="18,18,18,20">
+                    <TextBlock Text="Avatar mode" Style="{StaticResource SectionTitle}" />
+                    <CheckBox x:Name="AvatarEnabled" Content="Use test avatar" Click="AvatarChanged" />
+                    
+                    <StackPanel x:Name="AvatarDetailsPanel" Visibility="Collapsed" Margin="0,8,0,12">
+                      <TextBlock Text="Avatar type" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,6" />
+                      <UniformGrid Columns="2" Margin="0,0,0,8">
+                        <Button x:Name="AvatarTestBtn" Content="GPU Test Avatar" Click="AvatarTestClick" Style="{StaticResource Selected}" Margin="0,0,3,0" Height="32" />
+                        <Button x:Name="AvatarCubismBtn" Content="Live2D Cubism" Click="AvatarCubismClick" Margin="3,0,0,0" Height="32" />
+                      </UniformGrid>
+                      
+                      <!-- Cubism Model Picker -->
+                      <Border x:Name="CubismModelCard" Background="#0C121E" BorderBrush="#1C273C" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8" Visibility="Collapsed">
+                        <StackPanel>
+                          <TextBlock x:Name="CubismModelName" Text="No model selected" FontSize="11" FontWeight="SemiBold" Foreground="#F8FAFC" />
+                          <TextBlock x:Name="CubismSdkNotice" Text="Cubism Native SDK required for .moc3 · Built-in GPU avatar active" FontSize="10" Foreground="#38BDF8" TextWrapping="Wrap" Margin="0,3,0,6" />
+                          <Button Content="Choose Live2D model…" Click="ChooseCubismModelClick" Height="28" FontSize="11" />
+                        </StackPanel>
+                      </Border>
+                      
+                      <TextBlock Text="Motion source" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,4,0,4" />
+                      <CheckBox x:Name="AvatarMotion" Content="Animate test pose" Click="AvatarChanged"
+                                IsEnabled="{Binding IsChecked, ElementName=AvatarEnabled}" Margin="0,2,0,4" />
+                      <TextBlock x:Name="MotionSourceDescription" Text="Animates head, eye and mouth motion in a continuous loop without camera input." Foreground="#93A4B8" FontSize="10" LineHeight="14" TextWrapping="Wrap" Margin="20,0,0,4" />
+                    </StackPanel>
                     <TextBlock Text="Background removal" Style="{StaticResource SectionTitle}" />
                     
                     <!-- Segmented Controls for Mode -->
@@ -331,6 +355,13 @@
                       <StackPanel Orientation="Horizontal">
                         <Path Data="{StaticResource SparkIcon}" Style="{StaticResource Icon}" Width="14" Height="14" Margin="0,0,8,0" Stroke="#00D2FF" />
                         <TextBlock Text="AI background removal" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
+                      </StackPanel>
+                    </Button>
+                    
+                    <Button x:Name="MediaOnlyButton" Click="MediaOnlyClick" Height="34" Margin="0,6,0,0">
+                      <StackPanel Orientation="Horizontal">
+                        <Path Data="{StaticResource ImageIcon}" Style="{StaticResource Icon}" Width="14" Height="14" Margin="0,0,8,0" Stroke="#38BDF8" />
+                        <TextBlock Text="Media only (No camera)" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
                       </StackPanel>
                     </Button>
                     

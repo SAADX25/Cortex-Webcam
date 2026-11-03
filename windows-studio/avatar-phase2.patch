@@ -1,0 +1,559 @@
+--- /dev/null
++++ b/include/cortex/filters/AvatarFilter.h
+@@ -0,0 +1,35 @@
++#pragma once
++#include "cortex/core/VideoFrame.h"
++#include <optional>
++
++namespace cortex {
++struct AvatarPose {
++    float yaw{}, pitch{}, roll{}, mouth{}, eyeOpen{1}, gazeX{}, gazeY{};
++};
++
++struct LandmarkPoint { float x{}, y{}; };
++// Coordinates in upright display pixels, with left/right ordered from the viewer.
++struct FaceLandmarks {
++    LandmarkPoint leftEye, rightEye, nose, upperLip, lowerLip;
++    float eyeOpen{1}, gazeX{}, gazeY{};
++};
++
++class FaceTracker {
++public:
++    virtual ~FaceTracker() = default;
++    virtual std::optional<FaceLandmarks> track(const VideoFrame&) = 0;
++};
++
++class AvatarFilter {
++public:
++    explicit AvatarFilter(std::shared_ptr<GpuDevice>);
++    static std::optional<AvatarPose> map(const FaceLandmarks&);
++    static AvatarPose testPose(double seconds);
++    // Called on the render thread with the compositing target and fullscreen VS bound.
++    void draw(const AvatarPose&, unsigned width, unsigned height);
++private:
++    std::shared_ptr<GpuDevice> gpu_;
++    ComPtr<ID3D11PixelShader> shader_;
++    ComPtr<ID3D11Buffer> constants_;
++};
++}
+--- /dev/null
++++ b/src/filters/AvatarFilter.cpp
+@@ -0,0 +1,52 @@
++#include "cortex/filters/AvatarFilter.h"
++#include "GpuHelpers.h"
++#include <algorithm>
++#include <cmath>
++#include <numbers>
++
++namespace cortex {
++std::optional<AvatarPose> AvatarFilter::map(const FaceLandmarks& f) {
++    const float dx=f.rightEye.x-f.leftEye.x, dy=f.rightEye.y-f.leftEye.y;
++    const float span=std::hypot(dx,dy);
++    if (!std::isfinite(span) || span<1) return {};
++    const float x=f.nose.x-(f.leftEye.x+dx*.5f);
++    const float y=f.nose.y-(f.leftEye.y+dy*.5f);
++    const float nx=(x*dx+y*dy)/(span*span), ny=(y*dx-x*dy)/(span*span);
++    const float mouth=std::hypot(f.upperLip.x-f.lowerLip.x,f.upperLip.y-f.lowerLip.y)/span;
++    for (float v : {nx,ny,mouth,f.eyeOpen,f.gazeX,f.gazeY})
++        if (!std::isfinite(v)) return {};
++    return AvatarPose{std::clamp(nx*80,-45.f,45.f),std::clamp((ny-.55f)*80,-35.f,35.f),
++        std::atan2(dy,dx)*180/std::numbers::pi_v<float>,std::clamp(mouth*4,0.f,1.f),
++        std::clamp(f.eyeOpen,0.f,1.f),std::clamp(f.gazeX,-1.f,1.f),std::clamp(f.gazeY,-1.f,1.f)};
++}
++
++AvatarPose AvatarFilter::testPose(double seconds) {
++    const float t=static_cast<float>(std::fmod(seconds,120.0));
++    return {18*std::sin(t),9*std::sin(2*t),6*std::sin(t*.5f),
++        .5f+.5f*std::sin(3*t),std::min(1.f,std::abs(std::fmod(t,4.f)-2)*12),
++        std::sin(t),.5f*std::cos(t)};
++}
++
++AvatarFilter::AvatarFilter(std::shared_ptr<GpuDevice> gpu):gpu_(std::move(gpu)) {
++    const auto code=detail::compile("AvatarPreview","ps_5_0");
++    detail::hr(gpu_->device->CreatePixelShader(code->GetBufferPointer(),code->GetBufferSize(),
++        nullptr,&shader_),"Avatar preview shader");
++    D3D11_BUFFER_DESC desc{};
++    desc.ByteWidth=32;
++    desc.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
++    detail::hr(gpu_->device->CreateBuffer(&desc,nullptr,&constants_),"Avatar pose buffer");
++}
++
++void AvatarFilter::draw(const AvatarPose& pose,unsigned width,unsigned height) {
++    D3D11_VIEWPORT viewport{0,0,float(width),float(height),0,1};
++    const float params[]={pose.yaw,pose.pitch,pose.roll,pose.mouth,pose.eyeOpen,
++        pose.gazeX,pose.gazeY,float(width)/float(height)};
++    auto* context=gpu_->context.Get();
++    context->RSSetViewports(1,&viewport);
++    context->UpdateSubresource(constants_.Get(),0,nullptr,params,0,0);
++    auto* buffer=constants_.Get();
++    context->PSSetConstantBuffers(0,1,&buffer);
++    context->PSSetShader(shader_.Get(),nullptr,0);
++    context->Draw(3,0);
++}
++}
+--- a/shaders/pipeline.hlsl
++++ b/shaders/pipeline.hlsl
+@@ -37,6 +37,21 @@
+     else if(Similarity>0.5)uv=float2(v.uv.y,1-v.uv.x);
+     return Source.Sample(LinearClamp,uv);
+ }
++// Asset-free test rig. Coordinates are isotropic in portrait and landscape.
++float4 AvatarPreview(Vertex v):SV_TARGET {
++    float2 p=(v.uv-.5)*2*float2(max(1,BackgroundUV.w),max(1,1/BackgroundUV.w));
++    float angle=radians(Spill);
++    p=mul(float2x2(cos(angle),sin(angle),-sin(angle),cos(angle)),p);
++    float edge=length(p/float2(.47,.58))-1;
++    float alpha=saturate(.5-edge/max(fwidth(edge),.0001));
++    float2 face=p-float2(Similarity,Softness)*.003;
++    float2 eye=float2(abs(face.x-BackgroundUV.y*.025)-.17,face.y+.09-BackgroundUV.z*.025);
++    float eyes=1-smoothstep(.9,1.05,length(eye/float2(.052,.009+.065*BackgroundUV.x)));
++    float mouth=1-smoothstep(.9,1.05,length((face-float2(0,.22))/float2(.09,.012+.065*Mode)));
++    float3 color=lerp(float3(.12,.43,.70),float3(.24,.83,.95),saturate(.6-p.y));
++    color=lerp(color,float3(.035,.065,.11),max(eyes,mouth));
++    return float4(color*alpha,alpha);
++}
+ // Fixed 512x288 normalized RGB NCHW tensor, generated on the GPU.
+ RWStructuredBuffer<float> Tensor : register(u0);
+ [numthreads(16,16,1)]
+--- a/include/cortex/filters/VideoProcessor.h
++++ b/include/cortex/filters/VideoProcessor.h
+@@ -1,6 +1,7 @@
+ ﻿#pragma once
+ #include "cortex/sources/VideoSourceManager.h"
+ #include <filesystem>
++#include "cortex/filters/AvatarFilter.h"
+ namespace cortex {
+ struct GpuImage {
+     ComPtr<ID3D11Texture2D> texture;
+@@ -12,6 +13,7 @@
+     RemovalMode removal{RemovalMode::ChromaKey};
+     float similarity{0.13f},softness{0.10f},spill{0.8f};
+     bool transparent{false};
++    bool avatarEnabled{}, avatarTestMotion{};
+     float backgroundZoom{1},backgroundX{.5f},backgroundY{.5f}; bool backgroundFit{false};
+     float background[3]{0.04f,0.04f,0.04f};
+ };
+@@ -21,6 +23,7 @@
+     VideoProcessor(std::shared_ptr<GpuDevice>,uint32_t width=1920,uint32_t height=1080);
+     ~VideoProcessor();
+     void setSettings(const FilterSettings&);
++    void setFaceTracker(std::unique_ptr<FaceTracker>);
+     void setOutputSize(uint32_t width,uint32_t height);
+     void setBackgroundImage(const std::filesystem::path&);
+     void clearBackground();
+--- a/src/filters/VideoProcessor.cpp
++++ b/src/filters/VideoProcessor.cpp
+@@ -26,6 +26,9 @@
+     std::unique_ptr<GpuColorConverter> backgroundConverter;
+     std::filesystem::path model;
+     FilterSettings settings;
++    std::unique_ptr<AvatarFilter> avatar;
++    std::unique_ptr<FaceTracker> tracker;
++    std::chrono::steady_clock::time_point avatarStart;
+     void draw(const GpuImage& image,ID3D11ShaderResourceView* mask,NormalizedRect rect,bool isBackground){
+         const float availableW=target.width*rect.width,availableH=target.height*rect.height;
+         float width=availableW,height=availableH;
+@@ -64,6 +67,7 @@
+     detail::hr(s.gpu->device->CreateRasterizerState(&raster,&s.rasterizer),"Composite rasterizer");
+ }
+ VideoProcessor::~VideoProcessor()=default;
++void VideoProcessor::setFaceTracker(std::unique_ptr<FaceTracker> tracker){impl_->tracker=std::move(tracker);}
+ void VideoProcessor::setOutputSize(uint32_t width,uint32_t height){
+     auto& s=*impl_;if(s.target.width==width&&s.target.height==height)return;
+     if(!width||!height||width>3840||height>3840||uint64_t(width)*height>3840ULL*2160)throw std::invalid_argument("Invalid output dimensions");
+@@ -76,6 +80,8 @@
+ void VideoProcessor::setSettings(const FilterSettings& settings){
+     if(!std::isfinite(settings.similarity)||!std::isfinite(settings.softness)||!std::isfinite(settings.spill)||settings.similarity<0||settings.similarity>1||settings.softness<0.001f||settings.softness>1||settings.spill<0||settings.spill>1)throw std::invalid_argument("Invalid chroma key controls");
+     if(settings.removal!=impl_->settings.removal)for(auto& [id,source]:impl_->sources){source->previous.reset();if(source->matting)source->matting->reset();}
++    if(settings.avatarEnabled && !impl_->settings.avatarEnabled)
++        impl_->avatarStart=std::chrono::steady_clock::now();
+     impl_->settings=settings;
+ }
+ void VideoProcessor::setMattingModel(const std::filesystem::path& model){
+@@ -102,7 +108,18 @@
+ GpuImage VideoProcessor::render(const SceneSnapshot& scene,FramePtr backgroundVideo){
+     auto& s=*impl_;
+     // Convert/infer before binding the composite target. AI has an explicit reduced-size I/O bridge.
+-    for(const auto& layer:scene.layers){
++    AvatarPose pose;
++    if(s.settings.avatarEnabled){
++        if(!s.avatar)s.avatar=std::make_unique<AvatarFilter>(s.gpu);
++        if(s.settings.avatarTestMotion){
++            const auto elapsed=std::chrono::steady_clock::now()-s.avatarStart;
++            pose=AvatarFilter::testPose(std::chrono::duration<double>(elapsed).count());
++        }else if(s.tracker && !scene.layers.empty() && scene.layers.front().frame){
++            auto landmarks=s.tracker->track(*scene.layers.front().frame);
++            if(landmarks)pose=AvatarFilter::map(*landmarks).value_or(AvatarPose{});
++        }
++    }
++    if(!s.settings.avatarEnabled)for(const auto& layer:scene.layers){
+         if(!layer.frame)continue;
+         auto& source=s.sources[layer.source];if(!source)source=std::make_unique<Impl::Source>(s.gpu);
+         if(source->previous!=layer.frame){
+@@ -125,7 +142,8 @@
+     const float clear[]={s.settings.transparent?0:s.settings.background[0],s.settings.transparent?0:s.settings.background[1],s.settings.transparent?0:s.settings.background[2],s.settings.transparent?0.0f:1.0f};
+     context->ClearRenderTargetView(target,clear);
+     if(background.view&&!s.settings.transparent)s.draw(background,nullptr,{},true);
+-    for(const auto& layer:scene.layers)if(layer.frame){auto& source=*s.sources.at(layer.source);s.draw(source.rgb,source.mask.Get(),layer.destination,false);}
++    if(s.settings.avatarEnabled)s.avatar->draw(pose,s.target.width,s.target.height);
++    else for(const auto& layer:scene.layers)if(layer.frame){auto& source=*s.sources.at(layer.source);s.draw(source.rgb,source.mask.Get(),layer.destination,false);}
+     context->OMSetRenderTargets(0,nullptr,nullptr);
+     return s.target;
+ }
+@@ -133,7 +151,8 @@
+     auto& s=*impl_;std::lock_guard lock(s.gpu->mutex);auto* context=s.gpu->context.Get();
+     auto* target=s.exportView.Get();context->OMSetRenderTargets(1,&target,nullptr);context->OMSetBlendState(nullptr,nullptr,0xffffffff);
+     D3D11_VIEWPORT viewport{0,0,static_cast<float>(s.target.width),static_cast<float>(s.target.height),0,1};context->RSSetViewports(1,&viewport);
+-    const float values[]={bottomUp?1.0f:0.0f,0,0,preserveAlpha?1.0f:0.0f};context->UpdateSubresource(s.constants.Get(),0,nullptr,values,0,0);
++    const float values[8]={bottomUp?1.0f:0.0f,0,0,preserveAlpha?1.0f:0.0f};context->UpdateSubresource(s.constants.Get(),0,nullptr,values,0,0);
++    auto* buffer=s.constants.Get();context->PSSetConstantBuffers(0,1,&buffer);
+     auto* view=s.target.view.Get();context->PSSetShaderResources(0,1,&view);context->PSSetShader(s.exportShader.Get(),nullptr,0);context->Draw(3,0);
+     view=nullptr;context->PSSetShaderResources(0,1,&view);context->OMSetRenderTargets(0,nullptr,nullptr);return s.exported;
+ }
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -41,7 +41,7 @@
+     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS shaders/pipeline.hlsl)
+     configure_file(shaders/ShaderSource.h.in generated/ShaderSource.generated.h @ONLY)
+     add_library(cortex_processing
+-        src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
++        src/filters/AvatarFilter.cpp src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
+         src/filters/RvmMatting.cpp src/filters/BackgroundVideo.cpp src/output/UnityCameraOutput.cpp)
+     target_include_directories(cortex_processing PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" third_party/unitycapture)
+     target_include_directories(cortex_processing SYSTEM PRIVATE "${FFMPEG_INCLUDE}")
+--- a/include/cortex/ui/StudioBridge.h
++++ b/include/cortex/ui/StudioBridge.h
+@@ -12,6 +12,7 @@
+     uint64_t frameRateRequestId{},frameRateAckId{};
+     wchar_t deviceName[128]{};
+ };
++enum CortexAvatarControl { CortexAvatarEnabled=19, CortexAvatarTestMotion=20 };
+ extern "C" {
+ #ifdef CORTEX_STUDIO_NATIVE_BUILD
+ #define CORTEX_STUDIO_API __declspec(dllexport)
+--- a/src/ui/StudioBridge.cpp
++++ b/src/ui/StudioBridge.cpp
+@@ -59,6 +59,7 @@
+     }
+ };
+ struct Controls {
++    bool avatarEnabled{},avatarTestMotion{};
+     bool output=false;int fps=30,mode=0,backgroundKind=0,videoPort=5004,controlPort=5005;
+     float backgroundZoom=1,backgroundX=.5f,backgroundY=.5f;bool backgroundFit=false;
+     float similarity=.13f,softness=.10f,spill=.8f;bool transparent=false;
+@@ -100,7 +101,7 @@
+                     if(current.background!=applied.background||current.backgroundKind!=applied.backgroundKind){
+                         try{video.reset();processor.clearBackground();if(current.backgroundKind==1&&!current.background.empty())processor.setBackgroundImage(current.background);if(current.backgroundKind==2&&!current.background.empty())video=std::make_unique<BackgroundVideo>(gpu,current.background);}catch(const std::exception& error){failure(error.what());}
+                     }
+-                    FilterSettings filter;filter.backgroundZoom=current.backgroundZoom;filter.backgroundX=current.backgroundX;filter.backgroundY=current.backgroundY;filter.backgroundFit=current.backgroundFit;filter.removal=static_cast<RemovalMode>(current.mode);filter.similarity=current.similarity;filter.softness=current.softness;filter.spill=current.spill;filter.transparent=current.transparent;processor.setSettings(filter);
++                    FilterSettings filter;filter.avatarEnabled=current.avatarEnabled;filter.avatarTestMotion=current.avatarTestMotion;filter.backgroundZoom=current.backgroundZoom;filter.backgroundX=current.backgroundX;filter.backgroundY=current.backgroundY;filter.backgroundFit=current.backgroundFit;filter.removal=static_cast<RemovalMode>(current.mode);filter.similarity=current.similarity;filter.softness=current.softness;filter.spill=current.spill;filter.transparent=current.transparent;processor.setSettings(filter);
+                     applied=current;
+                 }
+                 // Reception is always armed while Studio is open, including when
+@@ -151,10 +152,10 @@
+                 }
+                 try{rendered=processor.render(scene,video?video->latestFrame():FramePtr{});}
+                 catch(const std::exception& error){failure(error.what());FilterSettings original;original.removal=RemovalMode::None;processor.setSettings(original);{std::lock_guard lock(mutex);controls.mode=0;++controls.revision;}rendered=processor.render(scene);}
+-                if(!scene.layers.empty())preview.present(rendered);
++                if(current.avatarEnabled||!scene.layers.empty())preview.present(rendered);
+                 if(output)output->submit(processor.exportFrame(false,true));
+                 const auto now=Clock::now();if(now-metricTime>=std::chrono::seconds(1)){measuredFps=double(source.decodedFrames-lastFrames)/std::chrono::duration<double>(now-metricTime).count();lastFrames=source.decodedFrames;metricTime=now;}
+-                {std::lock_guard lock(mutex);state.running=source.state==SourceStatus::State::Running;state.hasFrame=!scene.layers.empty();state.virtualEnabled=current.output;state.mode=controls.mode;state.outputFps=current.fps;state.incomingFps=measuredFps;state.frames=source.decodedFrames;state.packets=source.packets;state.gaps=source.packetGaps;
++                {std::lock_guard lock(mutex);state.running=source.state==SourceStatus::State::Running;state.hasFrame=current.avatarEnabled||!scene.layers.empty();state.virtualEnabled=current.output;state.mode=controls.mode;state.outputFps=current.fps;state.incomingFps=measuredFps;state.frames=source.decodedFrames;state.packets=source.packets;state.gaps=source.packetGaps;
+                     state.width=scene.layers.empty()?0:rendered.width;state.height=scene.layers.empty()?0:rendered.height;
+                     const auto stats=output?output->stats():OutputStats{};state.virtualSent=stats.sent;state.virtualSkipped=stats.skipped;
+                     state.requestedPhoneFps=controls.frameRate.fps;state.frameRateRequestId=controls.frameRate.id;
+@@ -179,6 +180,8 @@
+         case 15:controls.backgroundZoom=std::clamp(static_cast<float>(value),1.f,3.f);break;
+         case 16:controls.backgroundX=std::clamp(static_cast<float>(value),0.f,1.f);break;
+         case 17:controls.backgroundY=std::clamp(static_cast<float>(value),0.f,1.f);break;
++        case CortexAvatarEnabled:controls.avatarEnabled=value!=0;break;
++        case CortexAvatarTestMotion:controls.avatarTestMotion=value!=0;break;
+         case 18:controls.backgroundFit=value!=0;break;
+         case 14:{if(value!=30&&value!=60)return;controls.frameRate={std::max(controls.frameRate.id+1,static_cast<uint64_t>(Clock::now().time_since_epoch().count())),static_cast<int>(value)};controls.frameRateCompleted=controls.frameRateFallback=false;break;}
+         default:return;}
+--- a/ui/CortexStudio/MainWindow.xaml
++++ b/ui/CortexStudio/MainWindow.xaml
+@@ -319,6 +319,10 @@
+               <TabItem Header="Appearance">
+                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                   <StackPanel Margin="18,18,18,20">
++                    <TextBlock Text="Avatar preview" Style="{StaticResource SectionTitle}" />
++                    <CheckBox x:Name="AvatarEnabled" Content="Use test avatar" Click="AvatarChanged" />
++                    <CheckBox x:Name="AvatarMotion" Content="Animate test pose" Click="AvatarChanged"
++                              IsEnabled="{Binding IsChecked, ElementName=AvatarEnabled}" Margin="0,4,0,16" />
+                     <TextBlock Text="Background removal" Style="{StaticResource SectionTitle}" />
+                     
+                     <!-- Segmented Controls for Mode -->
+--- a/ui/CortexStudio/MainWindow.xaml.cs
++++ b/ui/CortexStudio/MainWindow.xaml.cs
+@@ -459,6 +459,12 @@
+     }
+ 
+     private void RunClick(object sender, RoutedEventArgs e) => PreviewHost.Set(13, 1);
++
++    private void AvatarChanged(object sender, RoutedEventArgs e)
++    {
++        PreviewHost.Set(20, AvatarMotion.IsChecked == true ? 1 : 0);
++        PreviewHost.Set(19, AvatarEnabled.IsChecked == true ? 1 : 0);
++    }
+ 
+     private void OriginalClick(object sender, RoutedEventArgs e) { PreviewHost.Set(2, 0); SelectMode(0); }
+ 
+--- a/tests/ProcessingTests.cpp
++++ b/tests/ProcessingTests.cpp
+@@ -43,6 +43,14 @@
+         auto counter=read(gpu,rotate.rotate(quadrants,270));check(counter[1]>240&&counter[0]<10,"270 degree rotation moves green to top-left");
+     }
+     auto green=nv12(gpu,173,42,26),red=nv12(gpu,63,102,240),blue=nv12(gpu,32,240,118);
++    settings.avatarEnabled=true;
++    processor.setSettings(settings);
++    auto avatar=read(gpu,processor.render(scene(red)));
++    const auto center=(32*64+32)*4;
++    check(avatar[3]==0 && avatar[center+3]==255 && avatar[center+1]>0,"Avatar replaces camera with transparent surround");
++    check(read(gpu,processor.exportFrame(true))[center+3]==255,"Avatar reaches export");
++    settings.avatarEnabled=false;
++    processor.setSettings(settings);
+     auto keyed=read(gpu,processor.render(scene(green)));check(keyed[3]<10,"Green must become transparent");
+     auto foreground=read(gpu,processor.render(scene(red)));check(foreground[0]>220&&foreground[1]<30&&foreground[3]>240,"Red foreground and array slice must survive");
+     processor.render(scene(green));auto opaque=read(gpu,processor.exportFrame(false));check(opaque[3]==255&&opaque[0]<10,"Virtual camera default must flatten alpha");
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -59,21 +59,25 @@
+         list(APPEND ORT_DLLS "${DIRECTML_ROOT}/bin/x64-win/DirectML.dll")
+     endif()
+     set(CUBISM_SDK_ROOT "" CACHE PATH "Extracted Cubism Native SDK with Core and Framework")
+-    if(CUBISM_SDK_ROOT)
+-        if(NOT ONNXRUNTIME_ROOT OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+-            message(FATAL_ERROR "Avatar builds require ONNXRUNTIME_ROOT and MSVC x64")
+-        endif()
+-        find_package(directxtk CONFIG REQUIRED)
+-        find_library(CUBISM_CORE_RELEASE NAMES Live2DCubismCore_MD REQUIRED
++    if(CUBISM_SDK_ROOT AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
++        find_package(directxtk CONFIG QUIET)
++        find_library(CUBISM_CORE_RELEASE NAMES Live2DCubismCore_MD
+             PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
+-        find_library(CUBISM_CORE_DEBUG NAMES Live2DCubismCore_MDd REQUIRED
++        find_library(CUBISM_CORE_DEBUG NAMES Live2DCubismCore_MDd
+             PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
++    endif()
++    if(CUBISM_SDK_ROOT AND TARGET Microsoft::DirectXTK AND CUBISM_CORE_RELEASE AND CUBISM_CORE_DEBUG
++       AND EXISTS "${CUBISM_SDK_ROOT}/Core/include/Live2DCubismCore.h"
++       AND EXISTS "${CUBISM_SDK_ROOT}/Framework/CMakeLists.txt")
+         set(FRAMEWORK_SOURCE D3D11)
+         add_subdirectory("${CUBISM_SDK_ROOT}/Framework" "${CMAKE_CURRENT_BINARY_DIR}/CubismFramework")
+         target_include_directories(Framework PUBLIC "${CUBISM_SDK_ROOT}/Core/include")
+         target_link_libraries(Framework PRIVATE Microsoft::DirectXTK d3d11 d3dcompiler
+             optimized "${CUBISM_CORE_RELEASE}" debug "${CUBISM_CORE_DEBUG}")
+         target_link_libraries(cortex_processing PRIVATE Framework)
++        target_compile_definitions(cortex_processing PUBLIC CORTEX_HAS_CUBISM)
++    elseif(CUBISM_SDK_ROOT)
++        message(STATUS "Cubism dependencies incomplete; using built-in avatar")
+     endif()
+     target_link_libraries(cortex-receive PRIVATE cortex_processing)
+     add_library(CortexStudioNative SHARED src/ui/StudioBridge.cpp)
+--- a/include/cortex/filters/AvatarFilter.h
++++ b/include/cortex/filters/AvatarFilter.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ #include "cortex/core/VideoFrame.h"
+ #include <optional>
++#ifdef CORTEX_HAS_CUBISM
++namespace Live2D::Cubism::Framework { class CubismUserModel; }
++#endif
+ 
+ namespace cortex {
+ struct AvatarPose {
+@@ -20,6 +23,18 @@
+     virtual std::optional<FaceLandmarks> track(const VideoFrame&) = 0;
+ };
+ 
++class AvatarModel {
++public:
++    virtual ~AvatarModel() = default;
++    virtual void draw(ID3D11DeviceContext*, const AvatarPose&, unsigned width, unsigned height) = 0;
++};
++
++#ifdef CORTEX_HAS_CUBISM
++// The asset owner initializes Cubism and supplies a textured renderer on the processor device.
++std::unique_ptr<AvatarModel> makeCubismAvatar(
++    std::shared_ptr<Live2D::Cubism::Framework::CubismUserModel> model);
++#endif
++
+ class AvatarFilter {
+ public:
+     explicit AvatarFilter(std::shared_ptr<GpuDevice>);
+--- a/src/filters/AvatarFilter.cpp
++++ b/src/filters/AvatarFilter.cpp
+@@ -3,8 +3,63 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <numbers>
++#ifdef CORTEX_HAS_CUBISM
++#include <Model/CubismUserModel.hpp>
++#include <Rendering/D3D11/CubismRenderer_D3D11.hpp>
++#include <Id/CubismIdManager.hpp>
++#include <Math/CubismModelMatrix.hpp>
++#include <stdexcept>
++#endif
+ 
+ namespace cortex {
++#ifdef CORTEX_HAS_CUBISM
++namespace {
++namespace cubism = Live2D::Cubism::Framework;
++using Renderer = cubism::Rendering::CubismRenderer_D3D11;
++
++class CubismAvatar final : public AvatarModel {
++public:
++    explicit CubismAvatar(std::shared_ptr<cubism::CubismUserModel> asset) : asset_(std::move(asset)) {
++        if (!asset_ || !asset_->GetModel() || !asset_->GetRenderer<Renderer>())
++            throw std::invalid_argument("Cubism model and renderer must be initialized");
++    }
++
++    void draw(ID3D11DeviceContext* context, const AvatarPose& pose, unsigned width, unsigned height) override {
++        auto* model = asset_->GetModel();
++        const auto set = [&](const char* key, float value) {
++            model->SetParameterValue(cubism::CubismFramework::GetIdManager()->GetId(key), value);
++        };
++        set("ParamAngleX", pose.yaw);
++        set("ParamAngleY", pose.pitch);
++        set("ParamAngleZ", pose.roll);
++        set("ParamEyeLOpen", pose.eyeOpen);
++        set("ParamEyeROpen", pose.eyeOpen);
++        set("ParamEyeBallX", pose.gazeX);
++        set("ParamEyeBallY", pose.gazeY);
++        set("ParamMouthOpenY", pose.mouth);
++        model->Update();
++
++        D3D11_VIEWPORT viewport{0, 0, float(width), float(height), 0, 1};
++        context->RSSetViewports(1, &viewport);
++        cubism::CubismMatrix44 projection;
++        const float aspect = float(width) / float(height);
++        projection.Scale(std::min(1.f, 1.f/aspect), std::min(1.f, aspect));
++        projection.MultiplyByMatrix(asset_->GetModelMatrix());
++        auto* renderer = asset_->GetRenderer<Renderer>();
++        renderer->StartFrame(context);
++        renderer->SetMvpMatrix(&projection);
++        renderer->DrawModel();
++        renderer->EndFrame();
++    }
++private:
++    std::shared_ptr<cubism::CubismUserModel> asset_;
++};
++}
++std::unique_ptr<AvatarModel> makeCubismAvatar(std::shared_ptr<cubism::CubismUserModel> model) {
++    return std::make_unique<CubismAvatar>(std::move(model));
++}
++#endif
++
+ std::optional<AvatarPose> AvatarFilter::map(const FaceLandmarks& f) {
+     const float dx=f.rightEye.x-f.leftEye.x, dy=f.rightEye.y-f.leftEye.y;
+     const float span=std::hypot(dx,dy);
+--- a/include/cortex/filters/VideoProcessor.h
++++ b/include/cortex/filters/VideoProcessor.h
+@@ -23,6 +23,8 @@
+     VideoProcessor(std::shared_ptr<GpuDevice>,uint32_t width=1920,uint32_t height=1080);
+     ~VideoProcessor();
+     void setSettings(const FilterSettings&);
++    // Configure from the processing thread before rendering the next frame.
++    void setAvatarModel(std::unique_ptr<AvatarModel>);
+     void setFaceTracker(std::unique_ptr<FaceTracker>);
+     void setOutputSize(uint32_t width,uint32_t height);
+     void setBackgroundImage(const std::filesystem::path&);
+--- a/src/filters/VideoProcessor.cpp
++++ b/src/filters/VideoProcessor.cpp
+@@ -27,6 +27,7 @@
+     std::filesystem::path model;
+     FilterSettings settings;
+     std::unique_ptr<AvatarFilter> avatar;
++    std::unique_ptr<AvatarModel> avatarModel;
+     std::unique_ptr<FaceTracker> tracker;
+     std::chrono::steady_clock::time_point avatarStart;
+     void draw(const GpuImage& image,ID3D11ShaderResourceView* mask,NormalizedRect rect,bool isBackground){
+@@ -67,6 +68,7 @@
+     detail::hr(s.gpu->device->CreateRasterizerState(&raster,&s.rasterizer),"Composite rasterizer");
+ }
+ VideoProcessor::~VideoProcessor()=default;
++void VideoProcessor::setAvatarModel(std::unique_ptr<AvatarModel> model){impl_->avatarModel=std::move(model);}
+ void VideoProcessor::setFaceTracker(std::unique_ptr<FaceTracker> tracker){impl_->tracker=std::move(tracker);}
+ void VideoProcessor::setOutputSize(uint32_t width,uint32_t height){
+     auto& s=*impl_;if(s.target.width==width&&s.target.height==height)return;
+@@ -110,7 +112,7 @@
+     // Convert/infer before binding the composite target. AI has an explicit reduced-size I/O bridge.
+     AvatarPose pose;
+     if(s.settings.avatarEnabled){
+-        if(!s.avatar)s.avatar=std::make_unique<AvatarFilter>(s.gpu);
++        if(!s.avatarModel && !s.avatar)s.avatar=std::make_unique<AvatarFilter>(s.gpu);
+         if(s.settings.avatarTestMotion){
+             const auto elapsed=std::chrono::steady_clock::now()-s.avatarStart;
+             pose=AvatarFilter::testPose(std::chrono::duration<double>(elapsed).count());
+@@ -142,7 +144,10 @@
+     const float clear[]={s.settings.transparent?0:s.settings.background[0],s.settings.transparent?0:s.settings.background[1],s.settings.transparent?0:s.settings.background[2],s.settings.transparent?0.0f:1.0f};
+     context->ClearRenderTargetView(target,clear);
+     if(background.view&&!s.settings.transparent)s.draw(background,nullptr,{},true);
+-    if(s.settings.avatarEnabled)s.avatar->draw(pose,s.target.width,s.target.height);
++    if(s.settings.avatarEnabled){
++        if(s.avatarModel)s.avatarModel->draw(context,pose,s.target.width,s.target.height);
++        else s.avatar->draw(pose,s.target.width,s.target.height);
++    }
+     else for(const auto& layer:scene.layers)if(layer.frame){auto& source=*s.sources.at(layer.source);s.draw(source.rgb,source.mask.Get(),layer.destination,false);}
+     context->OMSetRenderTargets(0,nullptr,nullptr);
+     return s.target;
+--- a/src/ui/StudioBridge.cpp
++++ b/src/ui/StudioBridge.cpp
+@@ -151,12 +151,12 @@
+                     processor.setOutputSize(portrait?1080:1920,portrait?1920:1080);
+                 }
+                 try{rendered=processor.render(scene,video?video->latestFrame():FramePtr{});}
+-                catch(const std::exception& error){failure(error.what());FilterSettings original;original.removal=RemovalMode::None;processor.setSettings(original);{std::lock_guard lock(mutex);controls.mode=0;++controls.revision;}rendered=processor.render(scene);}
++                catch(const std::exception& error){if(current.avatarEnabled)throw;failure(error.what());FilterSettings original;original.removal=RemovalMode::None;processor.setSettings(original);{std::lock_guard lock(mutex);controls.mode=0;++controls.revision;}rendered=processor.render(scene);}
+                 if(current.avatarEnabled||!scene.layers.empty())preview.present(rendered);
+                 if(output)output->submit(processor.exportFrame(false,true));
+                 const auto now=Clock::now();if(now-metricTime>=std::chrono::seconds(1)){measuredFps=double(source.decodedFrames-lastFrames)/std::chrono::duration<double>(now-metricTime).count();lastFrames=source.decodedFrames;metricTime=now;}
+                 {std::lock_guard lock(mutex);state.running=source.state==SourceStatus::State::Running;state.hasFrame=current.avatarEnabled||!scene.layers.empty();state.virtualEnabled=current.output;state.mode=controls.mode;state.outputFps=current.fps;state.incomingFps=measuredFps;state.frames=source.decodedFrames;state.packets=source.packets;state.gaps=source.packetGaps;
+-                    state.width=scene.layers.empty()?0:rendered.width;state.height=scene.layers.empty()?0:rendered.height;
++                    state.width=state.hasFrame?rendered.width:0;state.height=state.hasFrame?rendered.height:0;
+                     const auto stats=output?output->stats():OutputStats{};state.virtualSent=stats.sent;state.virtualSkipped=stats.skipped;
+                     state.requestedPhoneFps=controls.frameRate.fps;state.frameRateRequestId=controls.frameRate.id;
+                     state.frameRatePending=controls.frameRate.id&&!controls.frameRateCompleted;state.phoneRateFallback=controls.frameRateFallback;
+--- a/scripts/PackageQualityBuild.ps1
++++ b/scripts/PackageQualityBuild.ps1
+@@ -1,6 +1,7 @@
+ param(
+     [string]$CrtDirectory='C:\Program Files\Microsoft Visual Studio\18\Community\VC\Redist\MSVC\14.51.36231\x64\Microsoft.VC145.CRT',
+     [switch]$Desktop,
++    [switch]$WindowsOnly,
+     [string]$PackageName='',
+     [string]$CubismSdkRoot
+ )
+@@ -192,11 +193,12 @@
+ }
+ 
+ $apk=Join-Path $workspace 'android-sender\app\build\outputs\apk\quality\app-quality.apk'
+-Copy-Item -LiteralPath $apk -Destination "$dist\CortexSender-Android.apk"
++if (!$WindowsOnly) { Copy-Item -LiteralPath $apk -Destination "$dist\CortexSender-Android.apk" }
+ Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
+     $relative=$_.FullName.Substring($package.Length+1)
+     "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $relative"
+ } | Set-Content -LiteralPath "$package\SHA256SUMS.txt" -Encoding utf8
+ Compress-Archive -LiteralPath $package -DestinationPath "$dist\$packageName.zip" -CompressionLevel Optimal -Force
+-Get-Item -LiteralPath "$dist\$packageName.zip","$dist\CortexSender-Android.apk" | Select-Object FullName,Length
+-
++Get-Item -LiteralPath "$dist\$packageName.zip" | Select-Object FullName,Length
++if (!$WindowsOnly) { Get-Item -LiteralPath "$dist\CortexSender-Android.apk" | Select-Object FullName,Length }
++
+--- a/ui/CortexStudio.LayoutTests/Program.cs
++++ b/ui/CortexStudio.LayoutTests/Program.cs
+@@ -23,6 +23,12 @@
+             var window = new MainWindow();
+             Check(Marshal.SizeOf(typeof(MainWindow).Assembly.GetType("CortexStudio.NativeState")!) == 3576, "Managed/native FPS state ABI must match");
+             Check(window.FindName("FpsSyncStatus") is TextBlock, "Frame-rate synchronization feedback is missing");
++            var avatar = (CheckBox)window.FindName("AvatarEnabled");
++            var motion = (CheckBox)window.FindName("AvatarMotion");
++            Check(avatar.IsChecked != true && !motion.IsEnabled, "Avatar must default to off");
++            avatar.IsChecked = true;
++            Check(motion.IsEnabled, "Test motion must become available with avatar mode");
++            avatar.IsChecked = false;
+             var root = (FrameworkElement)window.Content;
+             var workspace = (Grid)window.FindName("WorkspaceGrid");
+             var inspector = (FrameworkElement)window.FindName("InspectorPanel");
