@@ -1,0 +1,73 @@
+{
+  "Date": "2026-11-03T14:39:05.9121995+03:00",
+  "Removed": [
+    {
+      "Path": "windows-studio\\build-core",
+      "Files": 104,
+      "Bytes": 9288127.0,
+      "Removed": true
+    },
+    {
+      "Path": "windows-studio\\build",
+      "Files": 892,
+      "Bytes": 811841486.0,
+      "Removed": true
+    },
+    {
+      "Path": "android-sender\\app\\build",
+      "Files": 993,
+      "Bytes": 36961378.0,
+      "Removed": true
+    },
+    {
+      "Path": "android-sender\\build",
+      "Files": 1,
+      "Bytes": 135561.0,
+      "Removed": true
+    },
+    {
+      "Path": "android-sender\\.gradle",
+      "Files": 15,
+      "Bytes": 2585330.0,
+      "Removed": true
+    },
+    {
+      "Path": "android-sender\\.kotlin",
+      "Files": 0,
+      "Bytes": null,
+      "Removed": true
+    },
+    {
+      "Path": "android-sender\\docs\\ui-backups",
+      "Files": 1,
+      "Bytes": 14721.0,
+      "Removed": true
+    },
+    {
+      "Path": "windows-studio\\ui\\CortexStudio\\bin",
+      "Files": 1200,
+      "Bytes": 438791937.0,
+      "Removed": true
+    },
+    {
+      "Path": "windows-studio\\ui\\CortexStudio\\obj",
+      "Files": 261,
+      "Bytes": 1241451.0,
+      "Removed": true
+    },
+    {
+      "Path": "windows-studio\\ui\\CortexStudio.LayoutTests\\bin",
+      "Files": 810,
+      "Bytes": 292977406.0,
+      "Removed": true
+    },
+    {
+      "Path": "windows-studio\\ui\\CortexStudio.LayoutTests\\obj",
+      "Files": 37,
+      "Bytes": 577039.0,
+      "Removed": true
+    }
+  ],
+  "Preserved": "Current source tests, latest Windows/APK, registered camera DLL folder, signing keys, dependency caches",
+  "ProtectedHashesVerified": true
+}

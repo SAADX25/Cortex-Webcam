@@ -1,0 +1,6 @@
+build*/
+.deps/
+.vs/
+CMakeUserPresets.json
+**/bin/
+**/obj/

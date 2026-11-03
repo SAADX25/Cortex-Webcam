@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <StreamGeometry x:Key="CameraIcon">M3,5 L15,5 Q17,5 17,7 L17,17 Q17,19 15,19 L3,19 Q1,19 1,17 L1,7 Q1,5 3,5 M17,9 L23,5 L23,19 L17,15</StreamGeometry>
+  <StreamGeometry x:Key="PhoneIcon">M7,1 L17,1 Q20,1 20,4 L20,21 Q20,24 17,24 L7,24 Q4,24 4,21 L4,4 Q4,1 7,1 M9,4 L15,4 M10,20.5 L14,20.5</StreamGeometry>
+  <StreamGeometry x:Key="SlidersIcon">M2,6 L7,6 M11,6 L22,6 M2,18 L13,18 M17,18 L22,18 M9,3 L9,9 M15,15 L15,21 M2,12 L15,12 M19,12 L22,12 M17,9 L17,15</StreamGeometry>
+  <StreamGeometry x:Key="LinkIcon">M10,7 L13,4 Q17,0 21,4 Q25,8 21,12 L17,16 M14,17 L11,20 Q7,24 3,20 Q-1,16 3,12 L7,8 M8,16 L16,8</StreamGeometry>
+  <StreamGeometry x:Key="HelpIcon">M12,1 A11,11 0 1 1 11.99,1 M9,8 C9,3 18,5 15,10 L12,13 L12,15 M12,18 L12,19</StreamGeometry>
+  <StreamGeometry x:Key="RefreshIcon">M21,10 A9,9 0 1 0 20,17 M21,3 L21,10 L14,10</StreamGeometry>
+  <StreamGeometry x:Key="ImageIcon">M4,3 L20,3 Q22,3 22,5 L22,19 Q22,21 20,21 L4,21 Q2,21 2,19 L2,5 Q2,3 4,3 M2,17 L8,11 L13,16 L17,12 L22,17 M14,7 A1.5,1.5 0 1 1 13.99,7</StreamGeometry>
+  <StreamGeometry x:Key="PlayIcon">M8,4 L21,12 L8,20 Z</StreamGeometry>
+  <StreamGeometry x:Key="SparkIcon">M12,2 L15,9 L22,12 L15,15 L12,22 L9,15 L2,12 L9,9 Z</StreamGeometry>
+  <StreamGeometry x:Key="FrameIcon">M8,2 L2,2 L2,8 M16,2 L22,2 L22,8 M2,16 L2,22 L8,22 M22,16 L22,22 L16,22</StreamGeometry>
+  <StreamGeometry x:Key="MonitorIcon">M3,3 L21,3 Q23,3 23,5 L23,16 Q23,18 21,18 L3,18 Q1,18 1,16 L1,5 Q1,3 3,3 M12,18 L12,23 M7,23 L17,23</StreamGeometry>
+  <StreamGeometry x:Key="CloseIcon">M5,5 L19,19 M19,5 L5,19</StreamGeometry>
+  <StreamGeometry x:Key="MinimizeIcon">M4,12 L20,12</StreamGeometry>
+  <StreamGeometry x:Key="MaximizeIcon">M4,4 L20,4 L20,20 L4,20 Z</StreamGeometry>
+  <StreamGeometry x:Key="TrashIcon">M3,6 L21,6 M8,6 L8,3 Q8,2 9,2 L15,2 Q16,2 16,3 L16,6 M5,6 L6,20 Q6,22 8,22 L16,22 Q18,22 19,20 L20,6 M10,11 L10,17 M14,11 L14,17</StreamGeometry>
+  <StreamGeometry x:Key="PlusIcon">M12,4 L12,20 M4,12 L20,12</StreamGeometry>
+  <StreamGeometry x:Key="BanIcon">M12,2 A10,10 0 1 0 12,22 A10,10 0 1 0 12,2 M5,5 L19,19</StreamGeometry>
+  <StreamGeometry x:Key="CheckIcon">M4,12 L9,17 L20,6</StreamGeometry>
+</ResourceDictionary>

@@ -1,0 +1,520 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window x:Class="CortexStudio.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:CortexStudio" Title="Cortex Studio" Width="1440" Height="900" MinWidth="1080" MinHeight="720" WindowStartupLocation="CenterScreen" Background="{StaticResource Page}" Foreground="{StaticResource Ink}" FontFamily="Segoe UI" UseLayoutRounding="True" SnapsToDevicePixels="True" WindowStyle="None" ResizeMode="CanResize" Closing="OnClosing" PreviewKeyDown="WindowKeyDown">
+  <WindowChrome.WindowChrome>
+    <WindowChrome CaptionHeight="40" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0" UseAeroCaptionButtons="False" NonClientFrameEdges="None" />
+  </WindowChrome.WindowChrome>
+  <Border BorderBrush="#182336" BorderThickness="1" Background="{StaticResource Page}">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="40" />
+        <RowDefinition Height="54" />
+        <RowDefinition />
+        <RowDefinition Height="30" />
+      </Grid.RowDefinitions>
+      
+      <!-- Window Title Bar -->
+      <Grid Background="#090D15" MouseLeftButtonDown="TitleDrag">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel Orientation="Horizontal" Margin="18,0" VerticalAlignment="Center">
+          <Border Width="22" Height="22" CornerRadius="6" Background="#0C253D" BorderBrush="#0284C7" BorderThickness="1" Margin="0,0,10,0">
+            <Viewbox Width="12" Height="12">
+              <Path Fill="#00D2FF" Data="M4,0 L20,0 L24,4 L24,9 L18,9 L18,6 L7,6 L6,7 L6,17 L7,18 L18,18 L18,15 L24,15 L24,20 L20,24 L4,24 L0,20 L0,4 Z" />
+            </Viewbox>
+          </Border>
+          <TextBlock Text="CORTEX STUDIO" FontSize="12" FontWeight="Bold" Foreground="#F8FAFC" VerticalAlignment="Center" />
+          <Border Background="#101F33" BorderBrush="#1C3554" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
+            <TextBlock Text="0.9.3" FontSize="9" FontWeight="Bold" Foreground="#38BDF8" />
+          </Border>
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" WindowChrome.IsHitTestVisibleInChrome="True">
+          <Button Style="{StaticResource WindowButton}" ToolTip="Minimize" AutomationProperties.Name="Minimize" Click="MinimizeClick">
+            <Path Data="{StaticResource MinimizeIcon}" Style="{StaticResource Icon}" Width="12" Height="12" />
+          </Button>
+          <Button Style="{StaticResource WindowButton}" ToolTip="Maximize or restore" AutomationProperties.Name="Maximize" Click="MaximizeClick">
+            <Path Data="{StaticResource MaximizeIcon}" Style="{StaticResource Icon}" Width="11" Height="11" />
+          </Button>
+          <Button Style="{StaticResource WindowButton}" ToolTip="Close studio" AutomationProperties.Name="Close" Click="CloseClick">
+            <Path Data="{StaticResource CloseIcon}" Style="{StaticResource Icon}" Width="12" Height="12" />
+          </Button>
+        </StackPanel>
+      </Grid>
+      
+      <!-- Studio Command Bar -->
+      <Border Grid.Row="1" Background="#0C121E" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,1">
+        <Grid Margin="20,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock Text="Live Studio" FontSize="18" FontWeight="SemiBold" Foreground="#F8FAFC" />
+            <Border Width="1" Background="#1E2B40" Height="18" Margin="18,0" />
+            <TextBlock Text="Phone camera" Foreground="{StaticResource Muted}" FontSize="12" VerticalAlignment="Center" />
+            <Border x:Name="SessionBadge" Background="#141E2E" BorderBrush="#1E2F48" BorderThickness="1" CornerRadius="6" Padding="8,4" Margin="12,0,0,0">
+              <TextBlock x:Name="SessionStatus" Text="STANDBY" FontSize="9" FontWeight="Bold" Foreground="#F59E0B" />
+            </Border>
+          </StackPanel>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse x:Name="OutputDot" Fill="#64748B" Width="6" Height="6" Margin="0,0,8,0" />
+            <TextBlock x:Name="OutputHeader" Text="Camera output off" FontSize="12" Foreground="{StaticResource Muted}" VerticalAlignment="Center" />
+            <Border Width="1" Background="#1E2B40" Height="18" Margin="18,0,12,0" />
+            <Button Style="{StaticResource IconButton}" Click="ConnectionClick" ToolTip="Connection settings · Ctrl+," AutomationProperties.Name="Connection settings">
+              <Path Data="{StaticResource SlidersIcon}" Style="{StaticResource Icon}" />
+            </Button>
+          </StackPanel>
+        </Grid>
+      </Border>
+      
+      <!-- Studio Workspace -->
+      <Grid Grid.Row="2" x:Name="WorkspaceGrid">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition x:Name="SourcesColumn" Width="214" MinWidth="180" MaxWidth="280" />
+          <ColumnDefinition />
+          <ColumnDefinition x:Name="InspectorColumn" Width="340" MinWidth="295" MaxWidth="440" />
+        </Grid.ColumnDefinitions>
+        
+        <!-- Left Sidebar: Sources -->
+        <Border x:Name="SourcesPanel" Background="#0A0E18" BorderBrush="{StaticResource Line}" BorderThickness="0,0,1,0">
+          <Grid Margin="14,18,14,14">
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <StackPanel>
+              <Grid Margin="6,0,6,12">
+                <TextBlock Text="SOURCES" Style="{StaticResource Caption}" />
+                <Border Background="#121A2A" CornerRadius="4" Padding="5,1" HorizontalAlignment="Right">
+                  <TextBlock Text="01" FontFamily="Consolas" FontSize="11" FontWeight="SemiBold" Foreground="#38BDF8" />
+                </Border>
+              </Grid>
+              <Border MouseLeftButtonUp="SourceDetailsClick" Cursor="Hand" ToolTip="Phone and stream details" CornerRadius="12" Background="#101726" BorderBrush="#1A283E" BorderThickness="1" Padding="14">
+                <StackPanel>
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition />
+                    </Grid.ColumnDefinitions>
+                    <Border Background="#0C253D" BorderBrush="#0284C7" BorderThickness="1" CornerRadius="8" Width="36" Height="38">
+                      <Viewbox Width="16" Height="24">
+                        <Path Data="{StaticResource PhoneIcon}" Stroke="#38BDF8" StrokeThickness="1.5" StrokeLineJoin="Round" />
+                      </Viewbox>
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="12,1,0,0">
+                      <TextBlock x:Name="DeviceNameLabel" Text="Phone camera" FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap" Foreground="#F8FAFC" />
+                      <TextBlock Text="Cortex Sender" FontSize="11" Foreground="#38BDF8" Margin="0,4,0,0" />
+                    </StackPanel>
+                  </Grid>
+                  <TextBlock x:Name="SourceState" Text="Waiting for connection" Foreground="#94A3B8" FontSize="11" Margin="0,14,0,0" TextWrapping="Wrap" />
+                  <Border Background="#0B101C" CornerRadius="5" Padding="7,3" Margin="0,6,0,0" HorizontalAlignment="Left">
+                    <TextBlock x:Name="PeerAddress" Text="Auto-connect" FontSize="11" FontFamily="Consolas" Foreground="#93A4B8" TextWrapping="Wrap" />
+                  </Border>
+                </StackPanel>
+              </Border>
+              
+              <Border Height="1" Background="{StaticResource Line}" Margin="6,18,6,18" />
+              
+              <TextBlock Text="LOCAL NETWORK" Style="{StaticResource Caption}" Margin="6,0,0,10" />
+              <Border Background="#101726" BorderBrush="#1A283E" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="4,0,4,12">
+                <StackPanel>
+                  <TextBlock x:Name="PcAddressBadge" Text="Finding local address" FontSize="11" FontFamily="Consolas" Foreground="#CBD5E1" TextWrapping="Wrap" />
+                  <TextBlock x:Name="NetworkAccessLabel" Text="Checking phone access" Foreground="#93A4B8" FontSize="11" TextWrapping="Wrap" LineHeight="16" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
+              <Button x:Name="AllowPhoneButton" Content="Allow phone connection" Click="AllowPhoneClick" FontSize="12" Height="34" Margin="4,0,4,0" />
+            </StackPanel>
+            
+            <StackPanel Grid.Row="2">
+              <Border Background="#0E1624" BorderBrush="#182336" BorderThickness="1" CornerRadius="8" Padding="12">
+                <StackPanel>
+                  <TextBlock Text="Wireless pairing" FontSize="11" FontWeight="SemiBold" Foreground="#CBD5E1" />
+                  <TextBlock Text="Open Cortex Sender on the same Wi-Fi network to connect." Foreground="#93A4B8" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+              </Border>
+              <Button Style="{StaticResource Nav}" Click="HelpClick" Margin="0,10,0,0" ToolTip="Quick start · F1">
+                <StackPanel Orientation="Horizontal">
+                  <Path Data="{StaticResource HelpIcon}" Style="{StaticResource Icon}" Width="15" Height="15" Margin="0,0,10,0" />
+                  <TextBlock Text="Quick start" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
+                </StackPanel>
+              </Button>
+            </StackPanel>
+          </Grid>
+        </Border>
+        
+        <!-- Center Column: Program Monitor & Metrics -->
+        <Grid Grid.Column="1" Margin="20,18,20,14">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+          </Grid.RowDefinitions>
+          
+          <!-- Program Bar -->
+          <Grid Height="34">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+              <TextBlock Text="Camera preview" FontSize="18" FontWeight="SemiBold" Foreground="#F8FAFC" />
+              
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+              <Button x:Name="RunButton" Style="{StaticResource IconButton}" Click="RunClick" ToolTip="Reconnect phone" AutomationProperties.Name="Reconnect phone">
+                <Path Data="{StaticResource RefreshIcon}" Style="{StaticResource Icon}" Width="15" Height="15" />
+              </Button>
+              <Button x:Name="FocusButton" Style="{StaticResource IconButton}" Click="FocusClick" ToolTip="Focus preview · F11" AutomationProperties.Name="Focus preview" Margin="4,0,0,0">
+                <Path Data="{StaticResource FrameIcon}" Style="{StaticResource Icon}" Width="15" Height="15" />
+              </Button>
+            </StackPanel>
+          </Grid>
+          
+          <!-- Error Alert Banner -->
+          <Border x:Name="ErrorBanner" Grid.Row="1" Background="#2B1015" BorderBrush="#881337" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,6,0,10" Visibility="Collapsed">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <TextBlock x:Name="ErrorText" FontSize="12" Foreground="#FDA4AF" TextWrapping="Wrap" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Style="{StaticResource IconButton}" Click="DismissError" ToolTip="Dismiss error" AutomationProperties.Name="Dismiss error">
+                <Path Data="{StaticResource CloseIcon}" Style="{StaticResource Icon}" Width="12" Height="12" Stroke="#FDA4AF" />
+              </Button>
+            </Grid>
+          </Border>
+          
+          <!-- Direct3D Program Viewport Bezel -->
+          <Border Grid.Row="2" BorderBrush="#1C273B" BorderThickness="1" CornerRadius="12" Background="#05080F" Margin="0,8,0,0" ClipToBounds="True">
+            <Grid>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="34" />
+                <RowDefinition />
+                <RowDefinition Height="34" />
+              </Grid.RowDefinitions>
+              
+              <!-- Monitor Top HUD -->
+              <Border Background="#090E18" BorderBrush="#151E2E" BorderThickness="0,0,0,1">
+                <Grid Margin="14,0">
+                  <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="LiveDot" Width="6" Height="6" Fill="#F59E0B" Margin="0,0,8,0" />
+                    <TextBlock x:Name="LiveLabel" Text="STANDBY" FontSize="9" FontWeight="Bold" Foreground="#CBD5E1" />
+                  </StackPanel>
+                  <TextBlock x:Name="PreviewBadge" Text="30 FPS OUTPUT" FontSize="9" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#93A4B8" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                </Grid>
+              </Border>
+              
+              <!-- Native Preview & Waiting Screen -->
+              <Grid Grid.Row="1" Background="#05080F">
+                <local:NativePreview x:Name="PreviewHost" Visibility="Hidden" />
+                
+                <Grid x:Name="WaitingPanel">
+                  <Grid.Background>
+                    <DrawingBrush TileMode="Tile" Viewport="0,0,32,32" ViewportUnits="Absolute">
+                      <DrawingBrush.Drawing>
+                        <DrawingGroup>
+                          <GeometryDrawing Brush="#080C14">
+                            <GeometryDrawing.Geometry>
+                              <RectangleGeometry Rect="0,0,32,32" />
+                            </GeometryDrawing.Geometry>
+                          </GeometryDrawing>
+                          <GeometryDrawing Brush="#141E2F">
+                            <GeometryDrawing.Geometry>
+                              <EllipseGeometry Center="1,1" RadiusX="0.75" RadiusY="0.75" />
+                            </GeometryDrawing.Geometry>
+                          </GeometryDrawing>
+                        </DrawingGroup>
+                      </DrawingBrush.Drawing>
+                    </DrawingBrush>
+                  </Grid.Background>
+                  
+                  <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360" Margin="30">
+                    <Grid Width="110" Height="104" HorizontalAlignment="Center">
+                      <Ellipse Width="104" Height="104" Stroke="#1E2B40" StrokeThickness="1" StrokeDashArray="3 3" />
+                      <Border Width="64" Height="78" CornerRadius="14" Background="#0F1726" BorderBrush="#1E314D" BorderThickness="1">
+                        <Viewbox Width="24" Height="38">
+                          <Path Data="{StaticResource PhoneIcon}" Stroke="#38BDF8" StrokeThickness="1.4" StrokeLineJoin="Round" />
+                        </Viewbox>
+                      </Border>
+                      <Border Width="22" Height="22" Background="#00D2FF" CornerRadius="11" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,6,6">
+                        <Viewbox Width="10" Height="10">
+                          <Path Data="M3,2 L3,9 M0,5.5 L6,5.5" Stroke="#061826" StrokeThickness="1.5" />
+                        </Viewbox>
+                      </Border>
+                    </Grid>
+                    
+                    <TextBlock x:Name="WaitingTitle" Text="Connect your phone" TextAlignment="Center" FontSize="21" FontWeight="SemiBold" Foreground="#F8FAFC" Margin="0,20,0,0" />
+                    <TextBlock x:Name="WaitingDescription" Text="Open Cortex Sender on the same network.&#xA;Your camera appears here automatically." Foreground="#93A4B8" TextAlignment="Center" TextWrapping="Wrap" FontSize="12" LineHeight="20" Margin="0,8,0,0" />
+                    <TextBlock x:Name="DecodeDiagnostic" Foreground="#F59E0B" FontSize="11" TextAlignment="Center" TextWrapping="Wrap" Margin="0,10,0,0" />
+                    <Button Content="Connection help" Style="{StaticResource ButtonBase}" Click="HelpClick" Width="136" Height="34" Margin="0,18,0,0" FontSize="12" />
+                  </StackPanel>
+                </Grid>
+              </Grid>
+              
+              <!-- Monitor Bottom HUD -->
+              <Border Grid.Row="2" Background="#090E18" BorderBrush="#151E2E" BorderThickness="0,1,0,0">
+                <Grid Margin="14,0">
+                  <TextBlock x:Name="PreviewStatus" Text="Waiting for a video source" FontSize="10" Foreground="#93A4B8" VerticalAlignment="Center" />
+                  <Border Background="#101827" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock Text="FIT" FontSize="9" FontWeight="Bold" Foreground="#475569" ToolTip="The full camera image fits inside the monitor." />
+                  </Border>
+                </Grid>
+              </Border>
+            </Grid>
+          </Border>
+          
+          <Border Grid.Row="3" Margin="0,8,0,0" Padding="14,9" Background="#111C2A" CornerRadius="6">
+            <WrapPanel VerticalAlignment="Center">
+              <TextBlock Text="Input FPS" Foreground="#ADBCCD" Margin="0,0,8,0"/>
+              <TextBlock x:Name="FpsStat" Foreground="White" FontWeight="SemiBold" Margin="0,0,22,0"/>
+              <TextBlock Text="Resolution" Foreground="#ADBCCD" Margin="0,0,8,0"/>
+              <TextBlock x:Name="ResolutionStat" Foreground="White" FontWeight="SemiBold" Margin="0,0,22,0"/>
+              <TextBlock Text="Packet gaps" Foreground="#ADBCCD" Margin="0,0,8,0" ToolTip="Missing RTP packets"/>
+              <TextBlock x:Name="GapsStat" Foreground="White" FontWeight="SemiBold"/>
+            </WrapPanel>
+          </Border><!-- Connection Details Expander -->
+          <Expander Grid.Row="4" Header="Connection details" FontSize="11" Foreground="#93A4B8" Margin="0,10,0,0">
+            <TextBlock x:Name="BottomHint" FontSize="11" Foreground="#7C8CA1" TextWrapping="Wrap" Margin="14,6,0,2" />
+          </Expander>
+        </Grid>
+        
+        <!-- Left Splitter: Drag to resize Sources Column -->
+        <GridSplitter x:Name="SourcesSplitter" Grid.Column="1" Width="8" HorizontalAlignment="Left" VerticalAlignment="Stretch" Background="Transparent" Cursor="SizeWE" ResizeBehavior="PreviousAndCurrent" ShowsPreview="False" Margin="-4,0,0,0" Panel.ZIndex="20" ToolTip="Drag to resize sources panel">
+          <GridSplitter.Template>
+            <ControlTemplate TargetType="GridSplitter">
+              <Border Background="Transparent" Width="8">
+                <Border Width="2" Height="36" CornerRadius="1" Background="#223249" VerticalAlignment="Center" />
+              </Border>
+            </ControlTemplate>
+          </GridSplitter.Template>
+        </GridSplitter>
+
+        <!-- Right Splitter: Drag to resize Inspector Column -->
+        <GridSplitter x:Name="InspectorSplitter" Grid.Column="1" Width="8" HorizontalAlignment="Right" VerticalAlignment="Stretch" Background="Transparent" Cursor="SizeWE" ResizeBehavior="CurrentAndNext" ShowsPreview="False" Margin="0,0,-4,0" Panel.ZIndex="20" ToolTip="Drag to resize sidebar width">
+          <GridSplitter.Template>
+            <ControlTemplate TargetType="GridSplitter">
+              <Border Background="Transparent" Width="8">
+                <Border Width="2" Height="36" CornerRadius="1" Background="#223249" VerticalAlignment="Center" />
+              </Border>
+            </ControlTemplate>
+          </GridSplitter.Template>
+        </GridSplitter>
+
+        <!-- Right Sidebar: Inspector -->
+        <Border x:Name="InspectorPanel" Grid.Column="2" Background="#0A0E18" BorderBrush="{StaticResource Line}" BorderThickness="1,0,0,0">
+          <Grid>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="50" />
+              <RowDefinition />
+            </Grid.RowDefinitions>
+            <Grid Margin="18,0">
+              <TextBlock Text="Studio controls" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" Foreground="#F8FAFC" />
+              <Border Background="#121A2A" CornerRadius="4" Padding="6,2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <TextBlock Text="CAMERA CONTROL" Style="{StaticResource Caption}" FontSize="8" Foreground="#38BDF8" />
+              </Border>
+            </Grid>
+            
+            <TabControl x:Name="InspectorTabs" Grid.Row="1" SelectionChanged="InspectorSelectionChanged">
+              <!-- Appearance Tab -->
+              <TabItem Header="Appearance">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                  <StackPanel Margin="18,18,18,20">
+                    <TextBlock Text="Background removal" Style="{StaticResource SectionTitle}" />
+                    
+                    <!-- Segmented Controls for Mode -->
+                    <UniformGrid Columns="2" Margin="0,0,0,6">
+                      <Button x:Name="OriginalButton" Content="Original" Click="OriginalClick" Style="{StaticResource Selected}" Margin="0,0,3,0" Height="34" />
+                      <Button x:Name="ChromaButton" Content="Green screen" Click="ChromaClick" Margin="3,0,0,0" Height="34" />
+                    </UniformGrid>
+                    
+                    <Button x:Name="AiButton" Click="AiClick" Height="36" Margin="0,0,0,0">
+                      <StackPanel Orientation="Horizontal">
+                        <Path Data="{StaticResource SparkIcon}" Style="{StaticResource Icon}" Width="14" Height="14" Margin="0,0,8,0" Stroke="#00D2FF" />
+                        <TextBlock Text="AI background removal" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
+                      </StackPanel>
+                    </Button>
+                    
+                    <TextBlock x:Name="ModeDescription" Text="Keep the original camera image." Foreground="#93A4B8" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,10,0,0" />
+                    
+                    <!-- Chroma Key Settings -->
+                    <StackPanel x:Name="ChromaControls" Visibility="Collapsed" Margin="0,16,0,0">
+                      <TextBlock Text="Key strength" FontSize="11" Foreground="{StaticResource Muted}" />
+                      <Slider x:Name="SimilaritySlider" Value="13" Maximum="60" ValueChanged="SimilarityChanged" AutomationProperties.Name="Chroma key strength" />
+                      <TextBlock Text="Edge softness" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,6,0,0" />
+                      <Slider x:Name="SoftnessSlider" Value="10" Minimum="1" Maximum="40" ValueChanged="SoftnessChanged" AutomationProperties.Name="Edge softness" />
+                      <TextBlock Text="Spill suppression" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,6,0,0" />
+                      <Slider x:Name="SpillSlider" Value="80" ValueChanged="SpillChanged" AutomationProperties.Name="Spill suppression" />
+                    </StackPanel>
+                    
+                    <Border Height="1" Background="{StaticResource Line}" Margin="0,20,0,18" />
+                    
+                    <!-- Scene Background Header -->
+                    <Grid Margin="0,0,0,10">
+                      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Scene background" FontWeight="SemiBold" Foreground="#E2E8F0" FontSize="12" />
+                        <Border Background="#121A2A" CornerRadius="4" Padding="5,1" Margin="8,0,0,0">
+                          <TextBlock x:Name="GalleryCountLabel" Text="0" FontSize="10" FontFamily="Consolas" Foreground="#38BDF8" />
+                        </Border>
+                      </StackPanel>
+                    </Grid>
+                    
+                    <!-- Background Card with Delete button right next to the image -->
+                    <Border x:Name="BackgroundCard" AllowDrop="True" Background="#0C121E" BorderBrush="#1C273C" BorderThickness="1" CornerRadius="10" ClipToBounds="True">
+                      <Grid Margin="10">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="90" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Image / Video Thumbnail on Left -->
+                        <Border Width="90" Height="64" CornerRadius="8" Background="#070A10" BorderBrush="#1E2A3E" BorderThickness="1" ClipToBounds="True">
+                          <Grid>
+                            <Image x:Name="BackgroundThumbnail" Cursor="SizeAll" ToolTip="Drag to reframe. Scroll to zoom." MouseLeftButtonDown="BeginFraming" MouseLeftButtonUp="EndFraming" MouseMove="DragFraming" PreviewMouseWheel="ZoomFraming" Stretch="UniformToFill" />
+                            
+                            <!-- Empty / Solid Placeholder -->
+                            <StackPanel x:Name="BackgroundPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
+                              <Viewbox Width="18" Height="18" HorizontalAlignment="Center">
+                                <Path Data="{StaticResource ImageIcon}" Stroke="#475569" StrokeThickness="1.4" StrokeLineJoin="Round" />
+                              </Viewbox>
+                              <TextBlock Text="No image" FontSize="9" Foreground="#93A4B8" Margin="0,3,0,0" />
+                            </StackPanel>
+                            
+                            <!-- Video Badge Overlay -->
+                            <Grid x:Name="VideoPlaceholder" Visibility="Collapsed">
+                              <Border Background="#C0000000" CornerRadius="3" Padding="4,1" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="4">
+                                <TextBlock Text="VIDEO" FontSize="7" FontWeight="Bold" Foreground="#38BDF8" />
+                              </Border>
+                            </Grid>
+                          </Grid>
+                        </Border>
+                        
+                        <!-- Next to Image: Name, Status & Red Delete X Button -->
+                        <Grid Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <StackPanel VerticalAlignment="Center" Margin="0,0,8,0">
+                            <TextBlock x:Name="BackgroundName" Text="Solid studio background" FontSize="12" FontWeight="SemiBold" Foreground="#F8FAFC" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="BackgroundStatusLabel" Text="Default / None" FontSize="10" Foreground="#93A4B8" Margin="0,3,0,0" />
+                          </StackPanel>
+                          
+                          <!-- Red Delete X Icon Button -->
+                          <Button x:Name="RemoveBackgroundBtn" Grid.Column="1" Click="ClearBackgroundClick" Style="{StaticResource ButtonBase}" Width="32" Height="32" Padding="0" Background="#281115" BorderBrush="#7F1D1D" ToolTip="Remove background (Off)">
+                            <Path Data="{StaticResource CloseIcon}" Style="{StaticResource Icon}" Width="13" Height="13" Stroke="#EF4444" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                          </Button>
+                        </Grid>
+                      </Grid>
+                    </Border>
+                    
+                    <!-- Saved Backgrounds Gallery -->
+                    <TextBlock Text="Background library" FontSize="11" FontWeight="SemiBold" Foreground="#8FA0B8" Margin="0,12,0,6" />
+                    <WrapPanel x:Name="BackgroundGallery" Orientation="Horizontal" Margin="0,0,0,6" />
+                    
+                    <UniformGrid Columns="2" Margin="0,10,0,0">
+                      <Button Click="ImageClick" Margin="0,0,4,0" Height="34">
+                        <StackPanel Orientation="Horizontal">
+                          <Path Data="{StaticResource ImageIcon}" Style="{StaticResource Icon}" Width="13" Height="13" Margin="0,0,7,0" />
+                          <TextBlock Text="Add Image" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
+                        </StackPanel>
+                      </Button>
+                      <Button Click="VideoClick" Margin="4,0,0,0" Height="34">
+                        <StackPanel Orientation="Horizontal">
+                          <Path Data="{StaticResource PlayIcon}" Style="{StaticResource Icon}" Width="12" Height="12" Margin="0,0,7,0" />
+                          <TextBlock Text="Add Video" FontSize="12" Foreground="{Binding Foreground,RelativeSource={RelativeSource AncestorType=Button}}" />
+                        </StackPanel>
+                      </Button>
+                    </UniformGrid>
+                    
+                    <Border Height="1" Background="{StaticResource Line}" Margin="0,18,0,16" />
+                    
+                    <!-- Framing Adjustments Section with Live Value Displays -->
+                    <Expander Header="Framing adjustments" IsExpanded="True" FontSize="12" Foreground="#CBD5E1">
+                      <StackPanel Margin="0,8,0,0">
+                        <CheckBox x:Name="BackgroundFit" Content="Fit entire image" Checked="BackgroundTransformChanged" Unchecked="BackgroundTransformChanged" />
+                        
+                        <Grid Margin="0,8,0,2">
+                          <TextBlock Text="Zoom" FontSize="11" Foreground="{StaticResource Muted}" />
+                          <TextBlock x:Name="ZoomValueLabel" Text="1.0x" FontSize="11" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" />
+                        </Grid>
+                        <Slider x:Name="BackgroundZoom" Minimum="1" Maximum="3" Value="1" ValueChanged="BackgroundTransformChanged" />
+                        
+                        <Grid Margin="0,6,0,2">
+                          <TextBlock Text="Horizontal position" FontSize="11" Foreground="{StaticResource Muted}" />
+                          <TextBlock x:Name="PosXValueLabel" Text="50%" FontSize="11" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" />
+                        </Grid>
+                        <Slider x:Name="BackgroundX" Minimum="0" Maximum="1" Value="0.5" ValueChanged="BackgroundTransformChanged" />
+                        
+                        <Grid Margin="0,6,0,2">
+                          <TextBlock Text="Vertical position" FontSize="11" Foreground="{StaticResource Muted}" />
+                          <TextBlock x:Name="PosYValueLabel" Text="50%" FontSize="11" FontFamily="Consolas" FontWeight="SemiBold" Foreground="#38BDF8" HorizontalAlignment="Right" />
+                        </Grid>
+                        <Slider x:Name="BackgroundY" Minimum="0" Maximum="1" Value="0.5" ValueChanged="BackgroundTransformChanged" />
+                        
+                        <Button Content="Reset framing" Click="ResetFramingClick" Height="30" Margin="0,10,0,0" FontSize="11" />
+                      </StackPanel>
+                    </Expander>
+                    
+                    <CheckBox x:Name="TransparentToggle" Content="Transparent background" Checked="TransparencyChanged" Unchecked="TransparencyChanged" Margin="0,16,0,0" />
+                    <TextBlock Text="Transparency is shown in the preview. Webcam output uses an opaque background." Foreground="#475569" FontSize="11" LineHeight="15" TextWrapping="Wrap" Margin="0,6,0,0" />
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              
+              <!-- Camera Output Tab -->
+              <TabItem Header="Camera output">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                  <StackPanel Margin="18,18,18,20">
+                    <TextBlock Text="Virtual camera" Style="{StaticResource SectionTitle}" />
+                    <CheckBox x:Name="OutputToggle" Content="Send to webcam apps" Checked="OutputChanged" Unchecked="OutputChanged" />
+                    
+                    <Border Background="#0C1524" BorderBrush="#182A45" BorderThickness="1" CornerRadius="10" Padding="14,12" Margin="0,14,0,0">
+                      <StackPanel>
+                        <TextBlock Text="Unity Video Capture" FontSize="12" FontWeight="SemiBold" Foreground="#F8FAFC" />
+                        <TextBlock x:Name="OutputDescription" Text="Checking camera installation" Foreground="#7C8CA1" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,6,0,0" />
+                      </StackPanel>
+                    </Border>
+                    
+                    <Button x:Name="InstallButton" Content="Install virtual camera" Click="InstallClick" Height="34" Margin="0,12,0,0" />
+                    <TextBlock Text="Choose Unity Video Capture as the camera in Discord, OBS or Zoom." Foreground="#93A4B8" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,12,0,0" />
+                    
+                    <Border Height="1" Background="{StaticResource Line}" Margin="0,20,0,18" />
+                    
+                    <TextBlock Text="Camera frame rate" Style="{StaticResource SectionTitle}" />
+                    <UniformGrid Columns="2">
+                      <Button x:Name="Fps30Button" Content="30 fps" Click="Fps30Click" Style="{StaticResource Selected}" Margin="0,0,4,0" Height="34" />
+                      <Button x:Name="Fps60Button" Content="60 fps" Click="Fps60Click" Margin="4,0,0,0" Height="34" />
+                    </UniformGrid>
+                    
+                    <TextBlock Text="Connect Cortex Sender to synchronize frame rate." Foreground="#93A4B8" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,12,0,0" x:Name="FpsSyncStatus" />
+                    
+                    <Border Height="1" Background="{StaticResource Line}" Margin="0,20,0,18" />
+                    
+                    <StackPanel Orientation="Horizontal">
+                      <Viewbox Width="15" Height="15" Margin="0,0,8,0">
+                        <Path Data="{StaticResource MonitorIcon}" Stroke="#38BDF8" StrokeThickness="1.5" />
+                      </Viewbox>
+                      <TextBlock Text="Resolution compatibility" FontSize="12" FontWeight="SemiBold" Foreground="#E2E8F0" />
+                    </StackPanel>
+                    <TextBlock Text="Output adapts to the size requested by your webcam app." Foreground="#93A4B8" FontSize="11" LineHeight="16" TextWrapping="Wrap" Margin="0,8,0,0" />
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+            </TabControl>
+          </Grid>
+        </Border>
+      </Grid>
+      
+      <!-- Bottom Status Bar -->
+      <Border Grid.Row="3" Background="#070A10" BorderBrush="#141E2F" BorderThickness="0,1,0,0">
+        <Grid Margin="16,0">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <Ellipse Width="5" Height="5" Fill="#10B981" Margin="0,0,8,0" />
+            <TextBlock Text="GPU Accelerated Engine (DirectX 11)" FontSize="9" Foreground="#93A4B8" />
+          </StackPanel>
+          <TextBlock Text="F11  Focus preview     /     F1  Help" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="9" Foreground="#475569" />
+        </Grid>
+      </Border>
+    </Grid>
+  </Border>
+</Window>

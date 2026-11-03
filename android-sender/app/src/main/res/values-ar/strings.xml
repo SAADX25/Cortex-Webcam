@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Cortex Sender</string>
+    <string name="host_hint">عنوان IP أو اسم الكمبيوتر</string>
+    <string name="port_hint">منفذ UDP</string>
+    <string name="fps_toggle">1080p بمعدل 60 إطاراً/ث (عند الإيقاف: 30)</string>
+    <string name="cbr_toggle">تفضيل CBR (عند الإيقاف: VBR)</string>
+    <string name="saver_toggle">توفير الطاقة — المس الشاشة السوداء للاستعادة</string>
+    <string name="stopped">متوقف</string>
+    <string name="start">بدء البث</string>
+    <string name="stop">إيقاف</string>
+    <string name="automatic">اتصال تلقائي بالاستوديو عبر Wi-Fi</string>
+    <string name="black_description">توفير الطاقة. المس لاستعادة المعاينة والتحكم.</string>
+    <string name="error">خطأ: %1$s</string>
+</resources>

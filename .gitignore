@@ -1,0 +1,40 @@
+# Build & Distribution outputs
+dist/
+build/
+build*/
+
+# Dependencies
+.deps/
+windows-studio/.deps/
+
+# IDE & Editor files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Android & Gradle
+.gradle/
+.gradle-user/
+.android/
+**/build/
+local.properties
+*.apk
+*.aab
+
+# .NET / C# build outputs
+**/bin/
+**/obj/
+
+# CMake
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+
+# Operating System files
+[Tt]humbs.db
+[Dd]esktop.ini
+.DS_Store

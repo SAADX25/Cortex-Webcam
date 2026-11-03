@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Cortex Sender</string>
+    <string name="host_hint">PC IPv4 address or hostname</string>
+    <string name="port_hint">UDP port</string>
+    <string name="default_port" translatable="false">5004</string>
+    <string name="fps_toggle">1080p 60 fps (off: 30 fps)</string>
+    <string name="cbr_toggle">Prefer CBR (off: VBR)</string>
+    <string name="saver_toggle">Power Saver — tap black screen to restore</string>
+    <string name="stopped">Stopped</string>
+    <string name="start">Start streaming</string>
+    <string name="stop">Stop</string>
+    <string name="automatic">Auto-connect to Studio on Wi-Fi</string>
+    <string name="black_description">Power Saver. Tap to restore preview and controls.</string>
+    <string name="error">Error: %1$s</string>
+</resources>
