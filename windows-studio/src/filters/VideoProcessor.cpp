@@ -295,22 +295,32 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
                         targetPose = *measured;
                         targetPose.yaw = std::clamp((targetPose.yaw - s.neutralPose.yaw) *
                                                         s.settings.avatarSensitivity,
-                                                    -45.f, 45.f);
+                                                    -30.f, 30.f);
                         targetPose.pitch = std::clamp((targetPose.pitch - s.neutralPose.pitch) *
                                                           s.settings.avatarSensitivity,
-                                                      -35.f, 35.f);
+                                                      -30.f, 30.f);
                         targetPose.roll = std::clamp((targetPose.roll - s.neutralPose.roll) *
                                                          s.settings.avatarSensitivity,
-                                                     -45.f, 45.f);
+                                                     -30.f, 30.f);
                     }
                 }
                 targetPose.armsEnabled = s.settings.avatarArms;
-                if (s.settings.avatarArms)
-                    targetPose.arms = s.tracker->upperBody().value_or(UpperBodyPose{});
+                if (s.settings.avatarArms) {
+                    const auto body = s.tracker->upperBody().value_or(UpperBodyPose{});
+                    targetPose.arms = body;
+                    targetPose.bodyAngleX = body.bodyAngleX;
+                    targetPose.bodyAngleY = body.bodyAngleY;
+                    targetPose.bodyAngleZ = body.bodyAngleZ;
+                }
                 if (s.settings.avatarMirror) {
                     targetPose.yaw = -targetPose.yaw;
                     targetPose.roll = -targetPose.roll;
+                    targetPose.gazeX = -targetPose.gazeX;
+                    targetPose.bodyAngleX = -targetPose.bodyAngleX;
+                    targetPose.bodyAngleZ = -targetPose.bodyAngleZ;
                     std::swap(targetPose.arms.left, targetPose.arms.right);
+                    std::swap(targetPose.browLY, targetPose.browRY);
+                    std::swap(targetPose.leftEyeOpen, targetPose.rightEyeOpen);
                 }
                 s.trackingStatus = s.tracker->status();
             }
@@ -322,7 +332,7 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
             // Faster eyelids preserve natural blinks while head motion stays smooth.
             pose = smoothAvatarPose(s.smoothedPose, targetPose, dt, s.settings.avatarSmoothing);
             const auto fast = smoothAvatarPose(s.smoothedPose, targetPose, dt,
-                                               std::min(.025f, s.settings.avatarSmoothing));
+                                               std::min(.020f, s.settings.avatarSmoothing));
             pose.eyeOpen = fast.eyeOpen;
             pose.leftEyeOpen = fast.leftEyeOpen;
             pose.rightEyeOpen = fast.rightEyeOpen;

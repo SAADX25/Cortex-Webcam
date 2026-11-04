@@ -128,6 +128,14 @@ int main(int argc, char** argv) {
             check(std::abs(whole.yaw - composed.yaw) < .001f && half.yaw > 0 && half.yaw < 30,
                   "Smoothing must be independent of frame rate");
             check(smoothAvatarPose({}, target, 0, 0).yaw == 30, "Zero smoothing must respond immediately");
+            target.bodyAngleX = 8.f;
+            target.browLY = 0.6f;
+            target.mouthForm = 0.5f;
+            auto smoothed = smoothAvatarPose({}, target, .05f, .1f);
+            check(smoothed.bodyAngleX > 0 && smoothed.bodyAngleX < 8.f &&
+                  smoothed.browLY > 0 && smoothed.browLY < 0.6f &&
+                  smoothed.mouthForm > 0 && smoothed.mouthForm < 0.5f,
+                  "Temporal smoothing must cover body, eyebrows, and mouth form");
         }
         settings.avatarEnabled = true;
         processor.setSettings(settings);

@@ -185,7 +185,9 @@ public:
     }
 
     void update(float elapsed, const AvatarPose& pose, int motion, int expression) {
+        // 1. Load saved parameters
         _model->LoadParameters();
+
         if (pose.cameraDriven != wasCameraDriven) {
             _motionManager->StopAllMotions();
             for (int i = 0; i < _model->GetParameterCount(); ++i)
@@ -194,18 +196,34 @@ public:
             selectedMotion = -2;
             wasCameraDriven = pose.cameraDriven;
         }
-        if (motion != selectedMotion) {
-            _motionManager->StopAllMotions();
-            selectedMotion = motion;
-            if (!pose.cameraDriven && motion >= 0 && size_t(motion) < motions.size())
-                _motionManager->StartMotionPriority(motions[motion].get(), false, 3);
-        }
-        if (!pose.cameraDriven && _motionManager->IsFinished() && !idle.empty()) {
-            _motionManager->StartMotionPriority(motions[idle[nextIdle++ % idle.size()]].get(),
-                                                false, 1);
+
+        // 2. Update background idle motion at reduced weight so it never overwrites active tracking
+        if (pose.cameraDriven) {
+            if (!idle.empty()) {
+                if (_motionManager->IsFinished()) {
+                    auto* idleMotion = motions[idle[0]].get();
+                    idleMotion->SetWeight(0.20f);
+                    idleMotion->SetLoop(true);
+                    _motionManager->StartMotionPriority(idleMotion, false, 1);
+                }
+            }
+        } else {
+            if (motion != selectedMotion) {
+                _motionManager->StopAllMotions();
+                selectedMotion = motion;
+                if (motion >= 0 && size_t(motion) < motions.size()) {
+                    motions[motion]->SetWeight(1.0f);
+                    _motionManager->StartMotionPriority(motions[motion].get(), false, 3);
+                }
+            }
+            if (_motionManager->IsFinished() && !idle.empty()) {
+                auto* idleMotion = motions[idle[nextIdle++ % idle.size()]].get();
+                idleMotion->SetWeight(1.0f);
+                _motionManager->StartMotionPriority(idleMotion, false, 1);
+            }
         }
         _motionManager->UpdateMotion(_model, elapsed);
-        _model->SaveParameters();
+
         if (expression != selectedExpression) {
             _expressionManager->StopAllMotions();
             selectedExpression = expression;
@@ -213,6 +231,8 @@ public:
                 _expressionManager->StartMotion(expressions[expression].get(), false);
         }
         _expressionManager->UpdateMotion(_model, elapsed);
+
+        // 3. Apply face, head, and body tracking parameters
         const auto set = [&](const char* id, float value) {
             _model->SetParameterValue(cubism::CubismFramework::GetIdManager()->GetId(id), value);
         };
@@ -223,7 +243,14 @@ public:
         set("ParamEyeROpen", pose.rightEyeOpen < 0 ? pose.eyeOpen : pose.rightEyeOpen);
         set("ParamEyeBallX", pose.gazeX);
         set("ParamEyeBallY", pose.gazeY);
+        set("ParamBrowLY", pose.browLY);
+        set("ParamBrowRY", pose.browRY);
         set("ParamMouthOpenY", pose.mouth);
+        set("ParamMouthForm", pose.mouthForm);
+        set("ParamBodyAngleX", pose.bodyAngleX);
+        set("ParamBodyAngleY", pose.bodyAngleY);
+        set("ParamBodyAngleZ", pose.bodyAngleZ);
+
         if (pose.cameraDriven) {
             // A is Haru's relaxed/crossed variant; B supplies the raised/bent variant.
             const auto arm = [&](const ArmPose& a, const char* upper, const char* lower,
@@ -246,10 +273,17 @@ public:
             arm(pose.arms.left, "ParamArmLA", "ParamArmLB", "Part01ArmLA001", "Part01ArmLB001");
             arm(pose.arms.right, "ParamArmRA", "ParamArmRB", "Part01ArmRA001", "Part01ArmRB001");
         }
-        if (_physics)
-            _physics->Evaluate(_model, elapsed);
+
+        // 4. Save parameters
+        _model->SaveParameters();
+
+        // 5. Apply eye blink/pose and physics
         if (_pose)
             _pose->UpdateParameters(_model, elapsed);
+        if (_physics)
+            _physics->Evaluate(_model, elapsed);
+
+        // 6. Update model state
         _model->Update();
     }
 };

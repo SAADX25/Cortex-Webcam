@@ -132,6 +132,9 @@ int main(int argc, char** argv) {
               "Arm geometry must distinguish a lowered straight arm from a raised bent arm");
         check(mapArm({10, 10}, {10, 40}, {10, 70}, .2f).confidence == 0,
               "Occluded wrist must not drive a pose");
+        const auto bodyTilt = mapBodyAngles({20, 25}, {10, 20}, 0.5f, -0.5f, 0.2f, -0.2f, true);
+        check(bodyTilt.angleZ > 0 && bodyTilt.angleX > 0,
+              "Body angle mapping must recover tilt and rotation");
         auto tracker = makeFaceTracker(gpu, std::filesystem::path(argv[1]));
         std::optional<FaceLandmarks> face;
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -204,6 +207,7 @@ int main(int argc, char** argv) {
         settings.avatarMode = 1;
         settings.avatarSmoothing = 0;
         settings.avatarSensitivity = 1;
+        settings.avatarMirror = false;
         processor.setSettings(settings);
         frame->readyAt = std::chrono::steady_clock::now();
         SceneSnapshot scene{{{SourceId::Phone, frame, {}}}};
@@ -212,6 +216,16 @@ int main(int argc, char** argv) {
                   recorded->pose.leftEyeOpen == 0 && recorded->pose.armsEnabled &&
                   recorded->pose.arms.left.bend > .69f,
               "Camera pose, mouth and blink must reach the rendered avatar");
+
+        // Test mirrored camera orientation
+        settings.avatarMirror = true;
+        processor.setSettings(settings);
+        processor.render(scene);
+        check(recorded->pose.yaw < -10 && recorded->pose.mouth > .9f &&
+                  recorded->pose.rightEyeOpen == 0 && recorded->pose.armsEnabled &&
+                  recorded->pose.arms.right.bend > .69f,
+              "Mirrored camera pose must invert yaw and swap eyes/arms");
+
         settings.avatarCalibration = 1;
         processor.setSettings(settings);
         processor.render(scene);

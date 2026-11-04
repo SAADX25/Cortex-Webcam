@@ -165,6 +165,12 @@ int main(int argc, char** argv) {
         check(changedPixels(turned, raised) > 1000 &&
                   armCoverage(raised) > armCoverage(turned) + 2000,
               "Tracked arms must occupy new arm pixels outside the torso, not just move the hair");
+        controls->arms.bodyAngleX = 8.f;
+        controls->arms.bodyAngleZ = -6.f;
+        frame->readyAt = std::chrono::steady_clock::now();
+        const auto bodyTurned = read(gpu, processor.render(live));
+        check(changedPixels(raised, bodyTurned) > 500,
+              "Tracked body angles must deform the Live2D body parameters");
         auto raisedPath = std::filesystem::path(argv[2]);
         raisedPath.replace_filename("haru-camera-arms.bmp");
         saveBmp(raisedPath, raised, 960, 720);

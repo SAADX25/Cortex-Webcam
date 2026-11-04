@@ -71,7 +71,8 @@ bool solve(double a[6][7], Parameters& answer) {
 }
 }  // namespace
 std::optional<HeadRotation> estimateHeadRotation(const std::array<LandmarkPoint, 66>& landmarks,
-                                                 unsigned width, unsigned height) {
+                                                 unsigned width, unsigned height,
+                                                 float sensitivity) {
     if (!width || !height)
         return {};
     const double focal = std::max(width, height), cx = width * .5, cy = height * .5;
@@ -146,7 +147,14 @@ std::optional<HeadRotation> estimateHeadRotation(const std::array<LandmarkPoint,
     if (!std::isfinite(rms) || rms > std::max(4., span * .25))
         return {};
     constexpr double degrees = 180 / std::numbers::pi;
-    // Cubism Y is up; screen coordinates are down. Mirror yaw/roll in UI if desired.
-    return HeadRotation{float(-p[1] * degrees), float(-p[0] * degrees), float(-p[2] * degrees)};
+    constexpr float maxAngle = 30.0f;
+    const float rawYaw = static_cast<float>(-p[1] * degrees);
+    const float rawPitch = static_cast<float>(-p[0] * degrees);
+    const float rawRoll = static_cast<float>(-p[2] * degrees);
+    return HeadRotation{
+        std::clamp(rawYaw * sensitivity, -maxAngle, maxAngle),
+        std::clamp(rawPitch * sensitivity, -maxAngle, maxAngle),
+        std::clamp(rawRoll * sensitivity, -maxAngle, maxAngle)
+    };
 }
 }  // namespace cortex

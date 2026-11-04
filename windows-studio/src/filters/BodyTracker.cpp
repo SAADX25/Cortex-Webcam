@@ -22,6 +22,42 @@ ArmPose mapArm(LandmarkPoint shoulder, LandmarkPoint elbow, LandmarkPoint wrist,
         std::acos(std::clamp((ux * vx + uy * vy) / (a * b), -1.f, 1.f)) / std::numbers::pi_v<float>;
     return {lift, bend, std::clamp(confidence, 0.f, 1.f)};
 }
+BodyAngles mapBodyAngles(LandmarkPoint leftShoulder, LandmarkPoint rightShoulder,
+                         float leftShoulderZ, float rightShoulderZ,
+                         float leftHipZ, float rightHipZ,
+                         bool hasHips) {
+    const float sdx = leftShoulder.x - rightShoulder.x;
+    const float sdy = leftShoulder.y - rightShoulder.y;
+    const float sDist = std::hypot(sdx, sdy);
+    float bodyAngleZ = 0.f;
+    if (sDist > 5.f && std::isfinite(sdx) && std::isfinite(sdy)) {
+        const float tiltRad = std::atan2(sdy, sdx);
+        const float tiltDeg = tiltRad * (180.f / std::numbers::pi_v<float>);
+        constexpr float zDeadzone = 0.5f;
+        if (std::abs(tiltDeg) > zDeadzone) {
+            bodyAngleZ = std::clamp((tiltDeg - std::copysign(zDeadzone, tiltDeg)) * 1.2f, -10.f, 10.f);
+        }
+    }
+    const float sdz = leftShoulderZ - rightShoulderZ;
+    float bodyAngleX = 0.f;
+    if (std::isfinite(sdz)) {
+        constexpr float xDeadzone = 0.015f;
+        if (std::abs(sdz) > xDeadzone) {
+            bodyAngleX = std::clamp((sdz - std::copysign(xDeadzone, sdz)) * 25.f, -10.f, 10.f);
+        }
+    }
+    float bodyAngleY = 0.f;
+    if (hasHips && std::isfinite(leftHipZ) && std::isfinite(rightHipZ)) {
+        const float shoulderZ = (leftShoulderZ + rightShoulderZ) * 0.5f;
+        const float hipZ = (leftHipZ + rightHipZ) * 0.5f;
+        const float pitchDiff = shoulderZ - hipZ;
+        constexpr float yDeadzone = 0.02f;
+        if (std::abs(pitchDiff) > yDeadzone) {
+            bodyAngleY = std::clamp((pitchDiff - std::copysign(yDeadzone, pitchDiff)) * 20.f, -10.f, 10.f);
+        }
+    }
+    return {bodyAngleX, bodyAngleY, bodyAngleZ};
+}
 #ifdef CORTEX_HAS_DIRECTML
 namespace {
 float sigmoid(float x) {
@@ -183,7 +219,13 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
         return mapArm(points[shoulder], points[elbow], points[wrist],
                       std::min({visibility[shoulder], visibility[elbow], visibility[wrist]}));
     };
-    return {arm(11, 13, 15), arm(12, 14, 16), presence * shoulderConfidence};
+    const bool hasHips = visibility[23] >= 0.4f && visibility[24] >= 0.4f;
+    const auto angles = mapBodyAngles(points[11], points[12],
+                                      landmarks[11 * 5 + 2], landmarks[12 * 5 + 2],
+                                      landmarks[23 * 5 + 2], landmarks[24 * 5 + 2],
+                                      hasHips);
+    return {arm(11, 13, 15), arm(12, 14, 16), presence * shoulderConfidence,
+            angles.angleX, angles.angleY, angles.angleZ};
 }
 #else
 struct BodyTracker::Impl {};

@@ -311,10 +311,83 @@ class OnnxFaceTracker final : public FaceTracker {
                             return std::hypot(points[a].x - points[b].x, points[a].y - points[b].y);
                         };
                         const auto eye = [&](int a) {
-                            const float ratio = (distance(a + 1, a + 5) + distance(a + 2, a + 4)) /
-                                                std::max(1.f, 2 * distance(a, a + 3));
-                            return std::clamp((ratio - .10f) / .16f, 0.f, 1.f);
+                            const float h1 = distance(a + 1, a + 5);
+                            const float h2 = distance(a + 2, a + 4);
+                            const float w = distance(a, a + 3);
+                            const float ratio = (h1 + h2) / std::max(1.f, 2.0f * w);
+                            // OpenSeeFace EAR calibration with baseline offset and deadzones
+                            constexpr float closedThreshold = 0.13f;
+                            constexpr float openThreshold = 0.27f;
+                            constexpr float deadzone = 0.04f;
+                            float val = (ratio - closedThreshold) / (openThreshold - closedThreshold);
+                            if (val <= deadzone)
+                                return 0.f;
+                            if (val >= 1.f - deadzone)
+                                return 1.f;
+                            return std::clamp((val - deadzone) / (1.f - 2.f * deadzone), 0.f, 1.f);
                         };
+
+                        // Pupil gaze estimation from eye contour centroid vs corner midpoint
+                        const auto gazeCalc = [&]() -> std::pair<float, float> {
+                            const float cx_l = (points[37].x + points[38].x + points[40].x + points[41].x) * 0.25f;
+                            const float cy_l = (points[37].y + points[38].y + points[40].y + points[41].y) * 0.25f;
+                            const float mid_x_l = (points[36].x + points[39].x) * 0.5f;
+                            const float mid_y_l = (points[36].y + points[39].y) * 0.5f;
+                            const float span_l = std::max(1.f, distance(36, 39));
+
+                            const float cx_r = (points[43].x + points[44].x + points[46].x + points[47].x) * 0.25f;
+                            const float cy_r = (points[43].y + points[44].y + points[46].y + points[47].y) * 0.25f;
+                            const float mid_x_r = (points[42].x + points[45].x) * 0.5f;
+                            const float mid_y_r = (points[42].y + points[45].y) * 0.5f;
+                            const float span_r = std::max(1.f, distance(42, 45));
+
+                            const float dx_l = (cx_l - mid_x_l) / span_l;
+                            const float dx_r = (cx_r - mid_x_r) / span_r;
+                            const float raw_gx = (dx_l + dx_r) * 0.5f;
+
+                            const float dy_l = (cy_l - mid_y_l) / span_l;
+                            const float dy_r = (cy_r - mid_y_r) / span_r;
+                            const float raw_gy = -((dy_l + dy_r) * 0.5f);
+
+                            constexpr float deadzone = 0.02f;
+                            constexpr float gain = 6.0f;
+                            float gx = 0.f;
+                            if (std::abs(raw_gx) > deadzone)
+                                gx = std::clamp((raw_gx - std::copysign(deadzone, raw_gx)) * gain, -1.f, 1.f);
+                            float gy = 0.f;
+                            if (std::abs(raw_gy) > deadzone)
+                                gy = std::clamp((raw_gy - std::copysign(deadzone, raw_gy)) * gain, -1.f, 1.f);
+                            return {gx, gy};
+                        };
+
+                        // Eyebrow vertical movement: distance between eyebrow and eye relative to eye span
+                        const auto browCalc = [&]() -> std::pair<float, float> {
+                            const float eye_y_l = (points[36].y + points[39].y) * 0.5f;
+                            const float brow_y_l = (points[18].y + points[19].y + points[20].y) / 3.0f;
+                            const float span_l = std::max(1.f, distance(36, 39));
+                            const float ratio_l = (eye_y_l - brow_y_l) / span_l;
+
+                            const float eye_y_r = (points[42].y + points[45].y) * 0.5f;
+                            const float brow_y_r = (points[23].y + points[24].y + points[25].y) / 3.0f;
+                            const float span_r = std::max(1.f, distance(42, 45));
+                            const float ratio_r = (eye_y_r - brow_y_r) / span_r;
+
+                            constexpr float neutralRatio = 0.60f;
+                            constexpr float deadzone = 0.03f;
+                            constexpr float gain = 3.5f;
+
+                            const float diff_l = ratio_l - neutralRatio;
+                            const float diff_r = ratio_r - neutralRatio;
+
+                            float browL = 0.f;
+                            if (std::abs(diff_l) > deadzone)
+                                browL = std::clamp((diff_l - std::copysign(deadzone, diff_l)) * gain, -1.f, 1.f);
+                            float browR = 0.f;
+                            if (std::abs(diff_r) > deadzone)
+                                browR = std::clamp((diff_r - std::copysign(deadzone, diff_r)) * gain, -1.f, 1.f);
+                            return {browL, browR};
+                        };
+
                         FaceLandmarks f;
                         f.leftEye = avg(36, 39);
                         f.rightEye = avg(42, 45);
@@ -324,11 +397,42 @@ class OnnxFaceTracker final : public FaceTracker {
                         f.leftEyeOpen = eye(36);
                         f.rightEyeOpen = eye(42);
                         f.eyeOpen = (f.leftEyeOpen + f.rightEyeOpen) * .5f;
-                        f.headRotation = estimateHeadRotation(points, image.width, image.height);
-                        f.needsHeadFit = true;
-                        // Gaze stays neutral: this model measures eyelids, not pupils.
+                        const auto [gx, gy] = gazeCalc();
+                        f.gazeX = gx;
+                        f.gazeY = gy;
+                        const auto [bL, bR] = browCalc();
+                        f.browLY = bL;
+                        f.browRY = bR;
                         const float span =
                             std::hypot(f.rightEye.x - f.leftEye.x, f.rightEye.y - f.leftEye.y);
+
+                        // Mouth form (smile/frown) and open ratio with baseline offset and deadzone
+                        const float innerDist = distance(60, 64);
+                        const float mouthRatio = innerDist / std::max(1.f, span);
+                        constexpr float mouthClosedBaseline = 0.032f;
+                        constexpr float mouthMaxAperture = 0.25f;
+                        constexpr float mouthDeadzone = 0.015f;
+                        float openY = (mouthRatio - mouthClosedBaseline) / (mouthMaxAperture - mouthClosedBaseline);
+                        if (openY <= mouthDeadzone)
+                            openY = 0.f;
+                        else
+                            openY = std::clamp((openY - mouthDeadzone) / (1.f - mouthDeadzone), 0.f, 1.f);
+                        f.mouthOpenY = openY;
+
+                        const float cornerY = (points[48].y + points[54].y) * 0.5f;
+                        const float lipMidY = (points[51].y + points[57].y) * 0.5f;
+                        const float cornerElev = (lipMidY - cornerY) / std::max(1.f, span);
+                        const float mouthWidth = distance(48, 54) / std::max(1.f, span);
+                        constexpr float neutralWidth = 0.45f;
+                        const float formRaw = cornerElev * 4.5f + (mouthWidth - neutralWidth) * 2.0f;
+                        constexpr float formDeadzone = 0.04f;
+                        float form = 0.f;
+                        if (std::abs(formRaw) > formDeadzone)
+                            form = std::clamp((formRaw - std::copysign(formDeadzone, formRaw)) * 2.5f, -1.f, 1.f);
+                        f.mouthForm = form;
+
+                        f.headRotation = estimateHeadRotation(points, image.width, image.height);
+                        f.needsHeadFit = true;
                         if (span > 4)
                             found = f;
                         float x1 = float(image.width), y1 = float(image.height), x2 = 0, y2 = 0;
@@ -403,7 +507,6 @@ public:
     std::optional<FaceLandmarks> track(const VideoFrame& frame) override {
         const auto now = Clock::now();
         if (!failed_ && frame.texture && frame.gpu == gpu_ && frame.width && frame.height &&
-            now - lastSubmit_ >= std::chrono::milliseconds(33) &&
             (lastTexture_ != frame.texture.Get() || lastTimestamp_ != frame.sourceTimestamp90k)) {
             lastSubmit_ = now;
             lastTexture_ = frame.texture.Get();

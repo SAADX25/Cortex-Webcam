@@ -69,6 +69,12 @@ int main() {
                               << estimated->roll << '\n';
                     throw std::runtime_error("Head pose recovered the wrong direction or scale");
                 }
+                const auto scaled = estimateHeadRotation(pixels, w, h, 1.5f);
+                check(scaled.has_value(), "Scaled head pose must converge");
+                check(std::abs(scaled->yaw) <= 30.01f &&
+                      std::abs(scaled->pitch) <= 30.01f &&
+                      std::abs(scaled->roll) <= 30.01f,
+                      "Head pose angles must clamp to Live2D range [-30, 30]");
                 pixels[30].x = std::numeric_limits<float>::quiet_NaN();
                 check(!estimateHeadRotation(pixels, w, h),
                       "Non-finite head input must be rejected");

@@ -151,7 +151,7 @@ struct Controls {
     uint64_t avatarRevision{};
     AvatarFraming avatarFraming;
     float avatarSmoothing{.06f}, avatarSensitivity{1.3f};
-    bool avatarArms{true}, avatarMirror{};
+    bool avatarArms{true}, avatarMirror{true};
     uint64_t avatarCalibration{};
     std::filesystem::path avatarModelPath;
     bool output = false;

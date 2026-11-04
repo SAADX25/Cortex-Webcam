@@ -18,10 +18,14 @@ struct ArmPose {
 struct UpperBodyPose {
     ArmPose left, right;
     float confidence{};
+    float bodyAngleX{}, bodyAngleY{}, bodyAngleZ{};
 };
 struct AvatarPose {
     float yaw{}, pitch{}, roll{}, mouth{}, eyeOpen{1}, gazeX{}, gazeY{};
     float leftEyeOpen{-1}, rightEyeOpen{-1};
+    float browLY{}, browRY{};
+    float mouthForm{};
+    float bodyAngleX{}, bodyAngleY{}, bodyAngleZ{};
     bool cameraDriven{};
     bool armsEnabled{};
     UpperBodyPose arms;
@@ -35,6 +39,8 @@ struct FaceLandmarks {
     LandmarkPoint leftEye, rightEye, nose, upperLip, lowerLip;
     float eyeOpen{1}, gazeX{}, gazeY{};
     float leftEyeOpen{-1}, rightEyeOpen{-1};
+    float browLY{}, browRY{};
+    float mouthOpenY{}, mouthForm{};
     std::optional<HeadRotation> headRotation;
     bool needsHeadFit{};
 };
