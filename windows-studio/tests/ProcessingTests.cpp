@@ -121,6 +121,25 @@ int main(int argc, char** argv) {
             auto opened = AvatarFilter::map(landmarks);
             check(opened && opened->mouth > .9f && opened->leftEyeOpen == 0 && opened->rightEyeOpen == 1,
                   "Real mouth aperture and independent blink survive mapping");
+            landmarks.imageWidth = 100;
+            landmarks.imageHeight = 100;
+            landmarks.needsHeadFit = true;
+            check(!AvatarFilter::map(landmarks),
+                  "A failed physical head fit must not fabricate a motionless face");
+            landmarks.headRotation = HeadRotation{40, 45, -35};
+            const auto physical = AvatarFilter::map(landmarks);
+            check(physical && physical->yaw == 40 && physical->pitch == 45 &&
+                      physical->roll == -35 && std::abs(physical->positionX + .3f) < .001f &&
+                      std::abs(physical->positionY + .4f) < .001f,
+                  "Physical head angles and normalized eye position must survive until calibration");
+            landmarks.hasHeadPosition = true;
+            landmarks.headPositionX = .12f;
+            landmarks.headPositionY = -.08f;
+            landmarks.headDepth = 5.f;
+            const auto spatial = AvatarFilter::map(landmarks);
+            check(spatial && spatial->headDepth == 5 && spatial->depthScale == 1 &&
+                      spatial->positionX == .12f && spatial->positionY == -.08f,
+                  "Fitted head position must replace eye-midpoint drift while depth awaits calibration");
             AvatarPose target; target.yaw = 30;
             auto half = smoothAvatarPose({}, target, .05f, .1f);
             auto composed = smoothAvatarPose(half, target, .05f, .1f);
@@ -131,11 +150,15 @@ int main(int argc, char** argv) {
             target.bodyAngleX = 8.f;
             target.browLY = 0.6f;
             target.mouthForm = 0.5f;
+            target.positionX = .2f;
+            target.positionY = -.1f;
             auto smoothed = smoothAvatarPose({}, target, .05f, .1f);
             check(smoothed.bodyAngleX > 0 && smoothed.bodyAngleX < 8.f &&
                   smoothed.browLY > 0 && smoothed.browLY < 0.6f &&
-                  smoothed.mouthForm > 0 && smoothed.mouthForm < 0.5f,
-                  "Temporal smoothing must cover body, eyebrows, and mouth form");
+                  smoothed.mouthForm > 0 && smoothed.mouthForm < 0.5f &&
+                  smoothed.positionX > 0 && smoothed.positionX < .2f &&
+                  smoothed.positionY < 0 && smoothed.positionY > -.1f,
+                  "Temporal smoothing must cover body, expression and face position");
         }
         settings.avatarEnabled = true;
         processor.setSettings(settings);

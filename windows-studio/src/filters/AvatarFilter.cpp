@@ -7,6 +7,8 @@
 
 namespace cortex {
 std::optional<AvatarPose> AvatarFilter::map(const FaceLandmarks& f) {
+    if (f.needsHeadFit && !f.headRotation)
+        return {};
     const float dx = f.rightEye.x - f.leftEye.x, dy = f.rightEye.y - f.leftEye.y;
     const float span = std::hypot(dx, dy);
     if (!std::isfinite(span) || span < 1)
@@ -16,13 +18,12 @@ std::optional<AvatarPose> AvatarFilter::map(const FaceLandmarks& f) {
     const float nx = (x * dx + y * dy) / (span * span), ny = (y * dx - x * dy) / (span * span);
     const float rawMouth = std::hypot(f.upperLip.x - f.lowerLip.x, f.upperLip.y - f.lowerLip.y) / span;
     for (float v : {nx, ny, rawMouth, f.eyeOpen, f.gazeX, f.gazeY, f.leftEyeOpen, f.rightEyeOpen,
-                    f.browLY, f.browRY, f.mouthOpenY, f.mouthForm})
+                    f.browLY, f.browRY, f.mouthOpenY, f.mouthForm, f.headDepth,
+                    f.headPositionX, f.headPositionY})
         if (!std::isfinite(v))
             return {};
     const HeadRotation rotation =
-        f.needsHeadFit && !f.headRotation
-            ? HeadRotation{}
-            : f.headRotation.value_or(HeadRotation{
+        f.headRotation.value_or(HeadRotation{
                   std::clamp(nx * 80, -30.f, 30.f), std::clamp((ny - .55f) * 80, -30.f, 30.f),
                   std::clamp(std::atan2(dy, dx) * 180 / std::numbers::pi_v<float>, -30.f, 30.f)});
     if (!std::isfinite(rotation.yaw) || !std::isfinite(rotation.pitch) ||
@@ -31,9 +32,21 @@ std::optional<AvatarPose> AvatarFilter::map(const FaceLandmarks& f) {
     constexpr float mouthBaseline = 0.03f;
     const float mouthVal = f.mouthOpenY > 0 ? f.mouthOpenY : (rawMouth <= mouthBaseline ? 0.f : std::clamp((rawMouth - mouthBaseline) * 4.5f, 0.f, 1.f));
     AvatarPose pose{};
-    pose.yaw = std::clamp(rotation.yaw, -30.f, 30.f);
-    pose.pitch = std::clamp(rotation.pitch, -30.f, 30.f);
-    pose.roll = std::clamp(rotation.roll, -30.f, 30.f);
+    // Keep physical angles until neutral calibration. Clipping a tilted camera's
+    // baseline here loses movement before the renderer ever sees it.
+    pose.yaw = rotation.yaw;
+    pose.pitch = rotation.pitch;
+    pose.roll = rotation.roll;
+    pose.headDepth = f.headDepth;
+    if (f.hasHeadPosition) {
+        pose.positionX = std::clamp(f.headPositionX, -.5f, .5f);
+        pose.positionY = std::clamp(f.headPositionY, -.5f, .5f);
+    } else if (f.imageWidth && f.imageHeight) {
+        pose.positionX = std::clamp((f.leftEye.x + f.rightEye.x) * .5f / f.imageWidth - .5f,
+                                    -.5f, .5f);
+        pose.positionY = std::clamp((f.leftEye.y + f.rightEye.y) * .5f / f.imageHeight - .5f,
+                                    -.5f, .5f);
+    }
     pose.mouth = std::clamp(mouthVal, 0.f, 1.f);
     pose.eyeOpen = std::clamp(f.eyeOpen, 0.f, 1.f);
     pose.gazeX = std::clamp(f.gazeX, -1.f, 1.f);
@@ -72,6 +85,10 @@ AvatarPose smoothAvatarPose(const AvatarPose& previous, const AvatarPose& target
     result.bodyAngleX = blend(previous.bodyAngleX, target.bodyAngleX);
     result.bodyAngleY = blend(previous.bodyAngleY, target.bodyAngleY);
     result.bodyAngleZ = blend(previous.bodyAngleZ, target.bodyAngleZ);
+    result.positionX = blend(previous.positionX, target.positionX);
+    result.positionY = blend(previous.positionY, target.positionY);
+    result.depthScale = blend(previous.depthScale, target.depthScale);
+    result.headDepth = target.headDepth;
     result.cameraDriven = target.cameraDriven;
     result.armsEnabled = target.armsEnabled;
     const auto arm = [&](const ArmPose& a, const ArmPose& b) {
@@ -117,10 +134,15 @@ AvatarFilter::AvatarFilter(std::shared_ptr<GpuDevice> gpu)
 
 void AvatarFilter::draw(const AvatarPose& pose, unsigned width, unsigned height,
                         const AvatarFraming& framing) {
-    const float scaledWidth = width * framing.scale, scaledHeight = height * framing.scale;
+    const float depthScale = pose.cameraDriven ? pose.depthScale : 1;
+    const float scale = framing.scale * depthScale;
+    const float scaledWidth = width * scale, scaledHeight = height * scale;
     const float top = std::min(1.f, float(width) / float(height));
-    D3D11_VIEWPORT viewport{(width - scaledWidth) * .5f + framing.x * width,
-                            (1 - framing.scale) * (1 - top) * height * .5f + framing.y * height,
+    const float moveX = pose.cameraDriven ? pose.positionX : 0;
+    const float moveY = pose.cameraDriven ? pose.positionY : 0;
+    D3D11_VIEWPORT viewport{(width - scaledWidth) * .5f + (framing.x + moveX) * width,
+                            (1 - scale) * (1 - top) * height * .5f +
+                                (framing.y + moveY) * height,
                             scaledWidth,
                             scaledHeight,
                             0,

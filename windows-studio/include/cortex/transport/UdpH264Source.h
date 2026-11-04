@@ -10,7 +10,7 @@ struct UdpSourceConfig {
     std::string bindAddress{"0.0.0.0"};
     std::string
         senderAddress;  // Optional numeric IPv4 allowlist. No hostname lookup on receive path.
-    std::chrono::milliseconds reorderWindow{8};
+    std::chrono::milliseconds reorderWindow{20};
 };
 class UdpH264Source final : public IVideoSource {
 public:

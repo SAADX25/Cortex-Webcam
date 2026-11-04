@@ -19,7 +19,7 @@ class UdpStreamer(
     private val orientation: () -> Int = { 0 },
 ) : Closeable {
     private data class AccessUnit(val nals: List<ByteArray>, val ptsUs: Long, val rotation: Int)
-    private val queue = ArrayBlockingQueue<AccessUnit>(3)
+    private val queue = ArrayBlockingQueue<AccessUnit>(6)
     private val running = AtomicBoolean(true)
     private val socket = DatagramSocket()
     private var waitingForIdr = true
@@ -31,14 +31,19 @@ class UdpStreamer(
         try {
             network?.bindSocket(socket)
             socket.connect(InetAddress.getByName(host), port)
-            socket.sendBufferSize = 64 * 1024
+            socket.sendBufferSize = 2 * 1024 * 1024
             worker = thread(name = "rtp-udp-send") {
                 val rtp = H264Rtp()
                 try {
                     while (running.get()) {
                         val unit = queue.take()
+                        var packetCount = 0
                         rtp.packetize(unit.nals, unit.ptsUs, unit.rotation) { bytes ->
                             socket.send(DatagramPacket(bytes, bytes.size))
+                            packetCount++
+                            if (packetCount % 8 == 0) {
+                                Thread.yield()
+                            }
                         }
                     }
                 } catch (e: Exception) { if (running.getAndSet(false)) onError(e) }

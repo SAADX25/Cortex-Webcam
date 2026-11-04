@@ -24,7 +24,7 @@ if($Desktop){
     Copy-Item -LiteralPath (Join-Path $release 'cortex-receive.exe') -Destination (Join-Path $package 'CortexStudio.exe')
 }
 $faceModels = Join-Path $studio '.deps\face-tracking'
-foreach ($name in @('mnv3_detection_opt.onnx','lm_model1_opt.onnx','LICENSE','SOURCE.json')) {
+foreach ($name in @('mnv3_detection_opt.onnx','lm_model1_opt.onnx','lm_model3_opt.onnx','mnv3_gaze32_split_opt.onnx','LICENSE','SOURCE.json')) {
     if (!(Test-Path -LiteralPath (Join-Path $faceModels $name))) { throw "Missing face tracking asset: $name. Run scripts/GetFaceTrackingModels.ps1." }
 }
 Copy-Item -LiteralPath $faceModels -Destination (Join-Path $package 'models') -Recurse -Force
@@ -36,6 +36,7 @@ foreach ($name in @('person_detection_mediapipe_2023mar.onnx','pose_estimation_m
 Copy-Item -LiteralPath $bodyModels -Destination (Join-Path $package 'models') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $bodyModels 'LICENSE') -Destination (Join-Path $package 'licenses\MediaPipePose-Apache-2.0.txt') -Force
 Copy-Item -LiteralPath (Join-Path $studio 'docs\AvatarCamera.md') -Destination (Join-Path $package 'Avatar-Camera.md') -Force
+Copy-Item -LiteralPath (Join-Path $studio 'docs\TrackingResearch.md') -Destination (Join-Path $package 'Tracking-Research.md') -Force
 $avatarAssets = Join-Path $workspace 'assets\avatars'
 if (Test-Path -LiteralPath $avatarAssets -PathType Container) {
     Copy-Item -LiteralPath $avatarAssets -Destination (Join-Path $package 'assets') -Recurse -Force
@@ -170,15 +171,18 @@ Cortex Webcam — نسخة اختبار الجودة
 '@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8
 if($Desktop){
 @'
-Cortex Studio Desktop 0.6 — خلفية مستقرة وتصوير طولي/عرضي
+Cortex Studio Desktop 0.10.0 — تتبع الوجه والعين والمسافة والمرفق
 
 1) فك ضغط الحزمة بالكامل. لا تنقل EXE وحده.
 2) شغّل CortexStudio.exe مباشرة. هذا التطبيق يفتح واجهة رسومية ومعاينة حية، بلا نافذة أوامر.
-3) ثبّت تحديث Cortex Sender 0.6 على أندرويد، واسمح بالكاميرا، واجعل الهاتف والكمبيوتر على الراوتر نفسه.
+3) افتح Cortex Sender على أندرويد، واسمح بالكاميرا، واجعل الهاتف والكمبيوتر على الراوتر نفسه.
    الاستقبال يبدأ وحده في ويندوز. افتح تطبيق الهاتف فقط ليكتشف الكمبيوتر ويبدأ البث.
    إذا سبق إيقاف البث على الهاتف، فتحه مجدداً يعيد الاتصال تلقائياً.
 4) عندما يصل الفيديو سيظهر مباشرة داخل PROGRAM PREVIEW، بدون الحاجة إلى OBS أو Zoom.
-تحديث 0.6 يحتاج تحديث التطبيقين لاستخدام اتجاه التصوير. Android 0.6 يرسل اتجاه الصورة داخل RTP، وWindows 0.6 يدورها على GPU ويختار 1080×1920 للطولي أو 1920×1080 للعرضي.
+إصلاح Avatar في 0.9.8 لا يحتاج تحديث أندرويد إذا كان فيديو الهاتف يصل بالفعل. تحميل الشخصية وتتبعها يعملان على الكمبيوتر. اضغط Cancel loading لإلغاء التحميل، ثم أعد اختيار الشخصية. راجع Avatar-Camera.md للتفاصيل.
+في 0.9.9، فعّل Follow face position لتنتقل الشخصية مع وجهك داخل الكادر. انظر للكاميرا واضغط Set neutral face & position لتحديد مركز الحركة. حركة الشعر تتبع فيزياء موديل الشخصية. تحديث أندرويد غير مطلوب لهذه التحسينات.
+في 0.10.0، يتوفر نموذج وجه أدق وتتبّع حدقة مستقل، وفلترة تستجيب لسرعة الحركة. Follow camera distance يتابع الاقتراب والابتعاد. Track upper body & arms يفعّل الجسم مع رفع الكتف وثني المرفق بشكل مستقل في Ren. اجعل المفاصل المطلوبة ظاهرة. لا يقيس البرنامج حركة الأصابع ولا يدّعي مطابقة الحركة 100%.
+اتجاه التصوير يحتاج Cortex Sender 0.6 أو أحدث؛ يدور الفيديو على GPU ويختار 1080×1920 للطولي أو 1920×1080 للعرضي.
 تم اختبار هاتف Samsung S24 Ultra فعلياً: 1920×1080، نحو 59 إطاراً/ثانية في الاستقبال، وصفر أخطاء فك ترميز خلال الاختبار.
 
 العدادات:

@@ -1,5 +1,6 @@
 #include "cortex/filters/AvatarFilter.h"
 #include <stdexcept>
+#include <iostream>
 
 #ifdef CORTEX_HAS_CUBISM
 #include "GpuHelpers.h"
@@ -11,7 +12,9 @@
 #include <Model/CubismUserModel.hpp>
 #include <Rendering/D3D11/CubismRenderer_D3D11.hpp>
 #include <wincodec.h>
+#include <d3dcompiler.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -19,13 +22,47 @@
 #include <limits>
 #include <vector>
 
+namespace {
+// Shader generation is invoked from the SDK. Its compile call is redirected by
+// CMake so a cold load can stop between individual shaders instead of compiling
+// the entire set before noticing that Studio is closing.
+thread_local std::stop_token avatarLoadStop;
+thread_local bool avatarShaderCompileStarted{};
+
+void checkAvatarLoadStop() {
+    if (avatarLoadStop.stop_requested())
+        throw std::runtime_error("Live2D character loading cancelled");
+}
+}  // namespace
+
+extern "C" HRESULT WINAPI CortexCompileCubismShader(
+    LPCVOID source, SIZE_T size, LPCSTR sourceName, const D3D_SHADER_MACRO* defines,
+    ID3DInclude* include, LPCSTR entry, LPCSTR target, UINT flags, UINT effectFlags,
+    ID3DBlob** code, ID3DBlob** errors) {
+    avatarShaderCompileStarted = true;
+    // Never throw through the SDK's C compiler callback. Let its renderer finish
+    // initialization so every destructor field is valid, then the surrounding
+    // C++ load operation reports cancellation before the model can be published.
+    if (avatarLoadStop.stop_requested()) {
+        if (code)
+            *code = nullptr;
+        if (errors)
+            *errors = nullptr;
+        return E_ABORT;
+    }
+    return D3DCompile(source, size, sourceName, defines, include, entry, target, flags,
+                      effectFlags, code, errors);
+}
+
 namespace cortex {
 namespace {
 namespace cubism = Live2D::Cubism::Framework;
 using Renderer = cubism::Rendering::CubismRenderer_D3D11;
 
 // The framework has global allocator, IDs, and device caches shared by all instances.
-// Always acquire the GPU lock before this lock.
+// Immediate-context work acquires the GPU lock before this lock. Loading uses
+// only thread-safe ID3D11Device resource creation and must never acquire the GPU
+// lock while holding this lock, otherwise rendering and loading can deadlock.
 std::recursive_mutex cubismMutex;
 
 class Allocator final : public cubism::ICubismAllocator {
@@ -91,6 +128,7 @@ std::shared_ptr<Runtime> acquireRuntime() {
 }
 
 std::vector<cubism::csmByte> readAsset(const std::filesystem::path& path) {
+    checkAvatarLoadStop();
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     const auto length = stream.tellg();
     if (!stream || length <= 0 || length > 128 * 1024 * 1024)
@@ -100,6 +138,7 @@ std::vector<cubism::csmByte> readAsset(const std::filesystem::path& path) {
     stream.seekg(0);
     if (!stream.read(reinterpret_cast<char*>(data.data()), length))
         throw std::runtime_error("Could not read Live2D asset");
+    checkAvatarLoadStop();
     return data;
 }
 
@@ -125,6 +164,7 @@ std::filesystem::path modelSettingsPath(std::filesystem::path path) {
 }
 
 ComPtr<ID3D11ShaderResourceView> loadTexture(GpuDevice& gpu, const std::filesystem::path& path) {
+    checkAvatarLoadStop();
     ComPtr<IWICImagingFactory> factory;
     detail::hr(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_PPV_ARGS(&factory)),
@@ -149,6 +189,7 @@ ComPtr<ID3D11ShaderResourceView> loadTexture(GpuDevice& gpu, const std::filesyst
     detail::hr(
         converter->CopyPixels(nullptr, width * 4, static_cast<UINT>(pixels.size()), pixels.data()),
         "Decode Live2D texture");
+    checkAvatarLoadStop();
     D3D11_TEXTURE2D_DESC desc{};
     desc.Width = width;
     desc.Height = height;
@@ -158,6 +199,7 @@ ComPtr<ID3D11ShaderResourceView> loadTexture(GpuDevice& gpu, const std::filesyst
     desc.Usage = D3D11_USAGE_IMMUTABLE;
     desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
     D3D11_SUBRESOURCE_DATA initial{pixels.data(), width * 4, 0};
+    // Device resource creation is thread-safe and does not use the immediate context.
     ComPtr<ID3D11Texture2D> texture;
     detail::hr(gpu.device->CreateTexture2D(&desc, &initial, &texture), "Create Live2D texture");
     ComPtr<ID3D11ShaderResourceView> view;
@@ -171,6 +213,72 @@ struct MotionDeleter {
 };
 using Motion = std::unique_ptr<cubism::ACubismMotion, MotionDeleter>;
 
+struct MappedParam {
+    int index{-1};
+    float minVal{-1.0f};
+    float maxVal{1.0f};
+    float defVal{0.0f};
+    bool valid{false};
+
+    void init(cubism::CubismModel* model, const std::vector<const char*>& candidateIds) {
+        if (!model)
+            return;
+        auto* idManager = cubism::CubismFramework::GetIdManager();
+        const int count = model->GetParameterCount();
+        for (const char* name : candidateIds) {
+            auto handle = idManager->GetId(name);
+            for (int i = 0; i < count; ++i) {
+                if (model->GetParameterId(i) == handle) {
+                    index = i;
+                    minVal = model->GetParameterMinimumValue(i);
+                    maxVal = model->GetParameterMaximumValue(i);
+                    defVal = model->GetParameterDefaultValue(i);
+                    valid = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    void setBipolar(cubism::CubismModel* model, float normalized) const {
+        if (!valid || !model)
+            return;
+        const float val = std::clamp(normalized, -1.0f, 1.0f);
+        const float actual = val >= 0.0f ? (defVal + val * (maxVal - defVal))
+                                         : (defVal + (-val) * (minVal - defVal));
+        model->SetParameterValue(index, actual);
+    }
+
+    void setUnipolar(cubism::CubismModel* model, float normalized) const {
+        if (!valid || !model)
+            return;
+        const float val = std::clamp(normalized, 0.0f, 1.0f);
+        const float actual = minVal + val * (maxVal - minVal);
+        model->SetParameterValue(index, actual);
+    }
+
+    void setEye(cubism::CubismModel* model, float openAmount) const {
+        if (!valid || !model)
+            return;
+        float actual = defVal;
+        if (openAmount <= 1.0f) {
+            const float clamped = std::clamp(openAmount, 0.0f, 1.0f);
+            actual = minVal + clamped * (defVal - minVal);
+        } else {
+            const float clamped = std::clamp(openAmount, 1.0f, 2.0f);
+            actual = defVal + (clamped - 1.0f) * (maxVal - defVal);
+        }
+        model->SetParameterValue(index, actual);
+    }
+
+    void setAngle(cubism::CubismModel* model, float degrees, float maxExpectedDeg = 30.0f) const {
+        if (!valid || !model)
+            return;
+        const float norm = degrees / (maxExpectedDeg > 0.0f ? maxExpectedDeg : 30.0f);
+        setBipolar(model, norm);
+    }
+};
+
 class Model final : public cubism::CubismUserModel {
 public:
     std::vector<Motion> motions, expressions;
@@ -178,17 +286,68 @@ public:
     int selectedMotion{-2}, selectedExpression{-2};
     size_t nextIdle{};
     bool wasCameraDriven{};
+    bool physicsInitialized{};
+
+    MappedParam angleX, angleY, angleZ;
+    MappedParam eyeLOpen, eyeROpen;
+    MappedParam eyeBallX, eyeBallY;
+    MappedParam browLY, browRY;
+    MappedParam mouthOpenY, mouthForm;
+    MappedParam bodyAngleX, bodyAngleY, bodyAngleZ;
+    MappedParam armLA, armLB, armRA, armRB;
+    MappedParam armL, armR;
+    MappedParam shoulderL, shoulderR, elbowL, elbowR, wristL, wristR;
 
     ~Model() override {
         _motionManager->StopAllMotions();
         _expressionManager->StopAllMotions();
     }
 
+    void initParameters() {
+        if (!_model)
+            return;
+        angleX.init(_model, {"ParamAngleX", "PARAM_ANGLE_X", "paramAngleX"});
+        angleY.init(_model, {"ParamAngleY", "PARAM_ANGLE_Y", "paramAngleY"});
+        angleZ.init(_model, {"ParamAngleZ", "PARAM_ANGLE_Z", "paramAngleZ"});
+
+        eyeLOpen.init(_model, {"ParamEyeLOpen", "PARAM_EYE_L_OPEN", "paramEyeLOpen"});
+        eyeROpen.init(_model, {"ParamEyeROpen", "PARAM_EYE_R_OPEN", "paramEyeROpen"});
+
+        eyeBallX.init(_model, {"ParamEyeBallX", "PARAM_EYE_BALL_X", "paramEyeBallX"});
+        eyeBallY.init(_model, {"ParamEyeBallY", "PARAM_EYE_BALL_Y", "paramEyeBallY"});
+
+        browLY.init(_model, {"ParamBrowLY", "PARAM_BROW_L_Y", "paramBrowLY"});
+        browRY.init(_model, {"ParamBrowRY", "PARAM_BROW_R_Y", "paramBrowRY"});
+
+        mouthOpenY.init(_model, {"ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y", "ParamMouthOpen",
+                                "paramMouthOpenY", "PARAM_MOUTH_OPEN"});
+        mouthForm.init(_model, {"ParamMouthForm", "PARAM_MOUTH_FORM", "paramMouthForm"});
+
+        bodyAngleX.init(_model, {"ParamBodyAngleX", "PARAM_BODY_ANGLE_X", "paramBodyAngleX"});
+        bodyAngleY.init(_model, {"ParamBodyAngleY", "PARAM_BODY_ANGLE_Y", "paramBodyAngleY"});
+        bodyAngleZ.init(_model, {"ParamBodyAngleZ", "PARAM_BODY_ANGLE_Z", "paramBodyAngleZ"});
+
+        armLA.init(_model, {"ParamArmLA", "paramArmLA"});
+        armLB.init(_model, {"ParamArmLB", "paramArmLB"});
+        armRA.init(_model, {"ParamArmRA", "paramArmRA"});
+        armRB.init(_model, {"ParamArmRB", "paramArmRB"});
+
+        armL.init(_model, {"ParamArmL", "PARAM_ARM_L", "paramArmL"});
+        armR.init(_model, {"ParamArmR", "PARAM_ARM_R", "paramArmR"});
+        shoulderL.init(_model, {"ParamArmL01"});
+        shoulderR.init(_model, {"ParamArmR01"});
+        elbowL.init(_model, {"ParamArmL02"});
+        elbowR.init(_model, {"ParamArmR02"});
+        wristL.init(_model, {"ParamArmL03"});
+        wristR.init(_model, {"ParamArmR03"});
+    }
+
     void update(float elapsed, const AvatarPose& pose, int motion, int expression) {
         // 1. Load saved parameters
         _model->LoadParameters();
 
-        if (pose.cameraDriven != wasCameraDriven) {
+        const bool modeChanged = pose.cameraDriven != wasCameraDriven;
+        if (modeChanged) {
             _motionManager->StopAllMotions();
             for (int i = 0; i < _model->GetParameterCount(); ++i)
                 _model->SetParameterValue(i, _model->GetParameterDefaultValue(i));
@@ -197,17 +356,10 @@ public:
             wasCameraDriven = pose.cameraDriven;
         }
 
-        // 2. Update background idle motion at reduced weight so it never overwrites active tracking
-        if (pose.cameraDriven) {
-            if (!idle.empty()) {
-                if (_motionManager->IsFinished()) {
-                    auto* idleMotion = motions[idle[0]].get();
-                    idleMotion->SetWeight(0.20f);
-                    idleMotion->SetLoop(true);
-                    _motionManager->StartMotionPriority(idleMotion, false, 1);
-                }
-            }
-        } else {
+        // Camera tracking owns the pose. Prerecorded idle motions also animate
+        // hair and body channels, so even a reduced weight introduces movement
+        // unrelated to the person in front of the camera.
+        if (!pose.cameraDriven) {
             if (motion != selectedMotion) {
                 _motionManager->StopAllMotions();
                 selectedMotion = motion;
@@ -221,8 +373,8 @@ public:
                 idleMotion->SetWeight(1.0f);
                 _motionManager->StartMotionPriority(idleMotion, false, 1);
             }
+            _motionManager->UpdateMotion(_model, elapsed);
         }
-        _motionManager->UpdateMotion(_model, elapsed);
 
         if (expression != selectedExpression) {
             _expressionManager->StopAllMotions();
@@ -233,55 +385,141 @@ public:
         _expressionManager->UpdateMotion(_model, elapsed);
 
         // 3. Apply face, head, and body tracking parameters
-        const auto set = [&](const char* id, float value) {
-            _model->SetParameterValue(cubism::CubismFramework::GetIdManager()->GetId(id), value);
-        };
-        set("ParamAngleX", pose.yaw);
-        set("ParamAngleY", pose.pitch);
-        set("ParamAngleZ", pose.roll);
-        set("ParamEyeLOpen", pose.leftEyeOpen < 0 ? pose.eyeOpen : pose.leftEyeOpen);
-        set("ParamEyeROpen", pose.rightEyeOpen < 0 ? pose.eyeOpen : pose.rightEyeOpen);
-        set("ParamEyeBallX", pose.gazeX);
-        set("ParamEyeBallY", pose.gazeY);
-        set("ParamBrowLY", pose.browLY);
-        set("ParamBrowRY", pose.browRY);
-        set("ParamMouthOpenY", pose.mouth);
-        set("ParamMouthForm", pose.mouthForm);
-        set("ParamBodyAngleX", pose.bodyAngleX);
-        set("ParamBodyAngleY", pose.bodyAngleY);
-        set("ParamBodyAngleZ", pose.bodyAngleZ);
+        angleX.setAngle(_model, pose.yaw, 30.0f);
+        angleY.setAngle(_model, pose.pitch, 30.0f);
+        angleZ.setAngle(_model, pose.roll, 30.0f);
+
+        const float lEye = pose.leftEyeOpen < 0 ? pose.eyeOpen : pose.leftEyeOpen;
+        const float rEye = pose.rightEyeOpen < 0 ? pose.eyeOpen : pose.rightEyeOpen;
+        eyeLOpen.setEye(_model, lEye);
+        eyeROpen.setEye(_model, rEye);
+
+        eyeBallX.setBipolar(_model, pose.gazeX);
+        eyeBallY.setBipolar(_model, pose.gazeY);
+
+        browLY.setBipolar(_model, pose.browLY);
+        browRY.setBipolar(_model, pose.browRY);
+
+        mouthOpenY.setUnipolar(_model, pose.mouth);
+        mouthForm.setBipolar(_model, pose.mouthForm);
+
+        bodyAngleX.setAngle(_model, pose.bodyAngleX, 10.0f);
+        bodyAngleY.setAngle(_model, pose.bodyAngleY, 10.0f);
+        bodyAngleZ.setAngle(_model, pose.bodyAngleZ, 10.0f);
 
         if (pose.cameraDriven) {
-            // A is Haru's relaxed/crossed variant; B supplies the raised/bent variant.
-            const auto arm = [&](const ArmPose& a, const char* upper, const char* lower,
-                                 const char* partA, const char* partB) {
-                const float lift = pose.armsEnabled ? std::clamp(a.lift, 0.f, 1.f) : 0;
-                const float bend = pose.armsEnabled ? std::clamp(a.bend, 0.f, 1.f) : 0;
-                set(upper, -1 + 2 * lift);
-                set(lower, 5 * bend);
-                const bool raised = lift > .25f || bend > .25f;
-                const auto show = [&](const char* id, float opacity) {
-                    set(id, opacity);
+            if (pose.armsEnabled) {
+                if (armLA.valid && armLB.valid) {
+                    const auto armHaru = [&](const ArmPose& a, const MappedParam& upper,
+                                             const MappedParam& lower, const char* partA,
+                                             const char* partB) {
+                        const float lift = std::clamp(a.lift, 0.f, 1.f);
+                        const float bend = std::clamp(a.bend, 0.f, 1.f);
+                        _model->SetParameterValue(upper.index, -1.0f + 2.0f * lift);
+                        _model->SetParameterValue(lower.index, 5.0f * bend);
+                        const bool raised = lift > .25f || bend > .25f;
+                        const auto show = [&](const char* id, float opacity) {
+                            const auto handle = cubism::CubismFramework::GetIdManager()->GetId(id);
+                            const int index = _model->GetPartIndex(handle);
+                            if (index >= 0 && index < _model->GetPartCount())
+                                _model->SetPartOpacity(index, opacity);
+                            const int pIndex = _model->GetParameterIndex(handle);
+                            if (pIndex >= 0 && pIndex < _model->GetParameterCount())
+                                _model->SetParameterValue(pIndex, opacity);
+                        };
+                        show(partA, raised ? 0.f : 1.f);
+                        show(partB, raised ? 1.f : 0.f);
+                    };
+                    armHaru(pose.arms.left, armLA, armLB, "Part01ArmLA001", "Part01ArmLB001");
+                    armHaru(pose.arms.right, armRA, armRB, "Part01ArmRA001", "Part01ArmRB001");
+                } else {
+                    const auto armRig = [&](const ArmPose& a, const MappedParam& arm,
+                                             const MappedParam& shoulder, const MappedParam& elbow,
+                                             const MappedParam& wrist) {
+                        const bool measured = a.confidence >= .6f;
+                        const float lift = measured ? std::clamp(a.lift, 0.f, 1.f) : 0.f;
+                        const float bend = measured ? std::clamp(a.bend, 0.f, 1.f) : 0.f;
+                        if (shoulder.valid && elbow.valid) {
+                            // Ren authors separate shoulder and elbow rotations.
+                            // Its neutral is 0, shoulder lifts toward +40, and a
+                            // flexed elbow bends toward -30. Keep each measured
+                            // joint independent instead of feeding max(lift,bend)
+                            // into the shoulder alone.
+                            shoulder.setBipolar(_model, lift);
+                            elbow.setBipolar(_model, -bend);
+                        } else {
+                            arm.setBipolar(_model, lift);
+                        }
+                        // No wrist orientation is measured by the current pose
+                        // contract. Leave its authored rest pose intact.
+                        if (wrist.valid)
+                            _model->SetParameterValue(wrist.index, wrist.defVal);
+                    };
+                    armRig(pose.arms.left, armL, shoulderL, elbowL, wristL);
+                    armRig(pose.arms.right, armR, shoulderR, elbowR, wristR);
+                }
+            } else {
+                // Arms disabled: keep natural resting arm pose
+                const auto showPart = [&](const char* id, float opacity) {
                     const auto handle = cubism::CubismFramework::GetIdManager()->GetId(id);
                     const int index = _model->GetPartIndex(handle);
                     if (index >= 0 && index < _model->GetPartCount())
                         _model->SetPartOpacity(index, opacity);
+                    const int pIndex = _model->GetParameterIndex(handle);
+                    if (pIndex >= 0 && pIndex < _model->GetParameterCount())
+                        _model->SetParameterValue(pIndex, opacity);
                 };
-                show(partA, raised ? 0.f : 1.f);
-                show(partB, raised ? 1.f : 0.f);
-            };
-            arm(pose.arms.left, "ParamArmLA", "ParamArmLB", "Part01ArmLA001", "Part01ArmLB001");
-            arm(pose.arms.right, "ParamArmRA", "ParamArmRB", "Part01ArmRA001", "Part01ArmRB001");
+                if (armLA.valid && armLB.valid) {
+                    showPart("Part01ArmLA001", 1.0f);
+                    showPart("Part01ArmLB001", 0.0f);
+                    showPart("Part01ArmRA001", 1.0f);
+                    showPart("Part01ArmRB001", 0.0f);
+                    _model->SetParameterValue(armLA.index, -1.0f);
+                    _model->SetParameterValue(armLB.index, 0.0f);
+                    _model->SetParameterValue(armRA.index, -1.0f);
+                    _model->SetParameterValue(armRB.index, 0.0f);
+                } else {
+                    for (const auto* parameter : {&armL, &armR, &shoulderL, &shoulderR,
+                                                   &elbowL, &elbowR, &wristL, &wristR})
+                        if (parameter->valid)
+                            _model->SetParameterValue(parameter->index, parameter->defVal);
+                }
+            }
         }
 
         // 4. Save parameters
         _model->SaveParameters();
 
-        // 5. Apply eye blink/pose and physics
+        // Keep measured channels authoritative if a custom physics rig also
+        // writes a tracked parameter. Hair and clothing keep their own outputs.
+        const std::array<const MappedParam*, 26> tracked{
+            &angleX, &angleY, &angleZ, &eyeLOpen, &eyeROpen, &eyeBallX, &eyeBallY,
+            &browLY, &browRY, &mouthOpenY, &mouthForm, &bodyAngleX, &bodyAngleY,
+            &bodyAngleZ, &armLA, &armLB, &armRA, &armRB, &armL, &armR,
+            &shoulderL, &shoulderR, &elbowL, &elbowR, &wristL, &wristR};
+        std::array<float, tracked.size()> measured{};
+        const bool hasMeasuredBody = pose.armsEnabled && pose.arms.confidence > 0.f;
+        if (pose.cameraDriven)
+            for (size_t i = 0; i < tracked.size(); ++i)
+                if (tracked[i]->valid && (i < 11 || hasMeasuredBody))
+                    measured[i] = _model->GetParameterValue(tracked[i]->index);
+
+        // 5. Apply pose and the model's authored hair/clothing physics. Start
+        // from equilibrium after loading or a camera/demo switch so stale demo
+        // motion does not leave the tracked character swaying.
         if (_pose)
             _pose->UpdateParameters(_model, elapsed);
-        if (_physics)
+        if (_physics) {
+            if (!physicsInitialized || modeChanged) {
+                _physics->Stabilization(_model);
+                physicsInitialized = true;
+            }
             _physics->Evaluate(_model, elapsed);
+        }
+        if (pose.cameraDriven)
+            for (size_t i = 0; i < tracked.size(); ++i)
+                if (tracked[i]->valid && (i < 11 || hasMeasuredBody))
+                    _model->SetParameterValue(tracked[i]->index, measured[i]);
 
         // 6. Update model state
         _model->Update();
@@ -306,8 +544,10 @@ public:
         cubism::CubismModelSettingJson settings(bytes.data(), static_cast<int>(bytes.size()));
         const auto moc = readAsset(assetPath(directory, settings.GetModelFileName()));
         asset_->LoadModel(moc.data(), static_cast<int>(moc.size()), true);
+        checkAvatarLoadStop();
         if (!asset_->GetModel())
             throw std::runtime_error("Invalid or unsupported Live2D moc3 model");
+        asset_->initParameters();
         if (settings.GetTextureCount() < 1 || settings.GetTextureCount() > 32)
             throw std::runtime_error("Live2D model must contain 1 to 32 textures");
         if (std::strlen(settings.GetPhysicsFileName())) {
@@ -329,11 +569,14 @@ public:
                                                  nullptr, nullptr, &settings, group, i));
                 if (!motion)
                     throw std::runtime_error("Invalid Live2D motion");
-                if (std::strcmp(group, "Idle") == 0)
+                checkAvatarLoadStop();
+                if (_stricmp(group, "idle") == 0)
                     asset_->idle.push_back(asset_->motions.size());
                 asset_->motions.push_back(std::move(motion));
             }
         }
+        if (asset_->idle.empty() && !asset_->motions.empty())
+            asset_->idle.push_back(0);
         for (int i = 0; i < settings.GetExpressionCount(); ++i) {
             if (i >= 256)
                 throw std::runtime_error("Too many Live2D expressions");
@@ -342,13 +585,25 @@ public:
                                                      settings.GetExpressionName(i)));
             if (!expression)
                 throw std::runtime_error("Invalid Live2D expression");
+            checkAvatarLoadStop();
             asset_->expressions.push_back(std::move(expression));
         }
         cubism::csmMap<cubism::csmString, float> layout;
         settings.GetLayoutMap(layout);
         asset_->GetModelMatrix()->SetupFromLayout(layout);
-        Renderer::SetConstantSettings(1, gpu_->device.Get());
-        asset_->CreateRenderer(1920, 1080);
+        checkAvatarLoadStop();
+        try {
+            Renderer::SetConstantSettings(1, gpu_->device.Get());
+            asset_->CreateRenderer(1920, 1080);
+            checkAvatarLoadStop();
+        } catch (...) {
+            // An interrupted first compile leaves an incomplete per-device
+            // shader cache. Remove it before retrying while the allocator lives.
+            // Compilation only occurs when this device has no existing cache.
+            if (avatarShaderCompileStarted && avatarLoadStop.stop_requested())
+                cubism::Rendering::CubismDeviceInfo_D3D11::ReleaseDeviceInfo(gpu_->device.Get());
+            throw;
+        }
         auto* renderer = asset_->GetRenderer<Renderer>();
         if (!renderer)
             throw std::runtime_error("Live2D D3D11 renderer initialization failed");
@@ -357,6 +612,7 @@ public:
                 loadTexture(*gpu_, assetPath(directory, settings.GetTextureFileName(i))));
             renderer->BindTexture(i, textures_.back().Get());
         }
+        checkAvatarLoadStop();
         renderer->IsPremultipliedAlpha(false);
     }
 
@@ -393,9 +649,12 @@ public:
         cubism::CubismMatrix44 projection;
         const float aspect = float(width) / float(height);
         const float top = std::min(1.f, aspect);
-        projection.Scale(std::min(1.f, 1.f / aspect) * framing_.scale, top * framing_.scale);
+        const float scale = framing_.scale * (pose.cameraDriven ? pose.depthScale : 1.f);
+        projection.Scale(std::min(1.f, 1.f / aspect) * scale, top * scale);
         // Zoom toward the top of the fitted model to keep the head in view.
-        projection.Translate(2 * framing_.x, (1 - framing_.scale) * top - 2 * framing_.y);
+        const float positionX = framing_.x + (pose.cameraDriven ? pose.positionX : 0.f);
+        const float positionY = framing_.y + (pose.cameraDriven ? pose.positionY : 0.f);
+        projection.Translate(2 * positionX, (1 - scale) * top - 2 * positionY);
         projection.MultiplyByMatrix(asset_->GetModelMatrix());
         renderer->StartFrame(context);
         renderer->SetMvpMatrix(&projection);
@@ -419,7 +678,21 @@ bool isCubismSupported() {
 }
 
 std::unique_ptr<AvatarModel> loadAvatarModel(std::shared_ptr<GpuDevice> gpu,
-                                             const std::filesystem::path& path) {
+                                             const std::filesystem::path& path,
+                                             std::stop_token stop) {
+    struct LoadScope {
+        std::stop_token previousStop{avatarLoadStop};
+        bool previousCompile{avatarShaderCompileStarted};
+        explicit LoadScope(std::stop_token token) {
+            avatarLoadStop = token;
+            avatarShaderCompileStarted = false;
+        }
+        ~LoadScope() {
+            avatarLoadStop = previousStop;
+            avatarShaderCompileStarted = previousCompile;
+        }
+    } scope(stop);
+    checkAvatarLoadStop();
     if (!gpu || !gpu->device || !gpu->context)
         throw std::invalid_argument("Live2D requires a D3D11 device");
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -432,8 +705,8 @@ std::unique_ptr<AvatarModel> loadAvatarModel(std::shared_ptr<GpuDevice> gpu,
                 CoUninitialize();
         }
     } apartment{SUCCEEDED(comResult)};
-    std::lock_guard gpuLock(gpu->mutex);
     std::lock_guard runtimeLock(cubismMutex);
+    checkAvatarLoadStop();
     return std::make_unique<LoadedAvatar>(std::move(gpu), path);
 }
 }  // namespace cortex
@@ -444,7 +717,8 @@ bool isCubismSupported() {
 }
 
 std::unique_ptr<AvatarModel> loadAvatarModel(std::shared_ptr<GpuDevice>,
-                                             const std::filesystem::path&) {
+                                             const std::filesystem::path&,
+                                             std::stop_token) {
     throw std::runtime_error(
         "Live2D support is unavailable in this build. Install Cubism Native SDK and rebuild.");
 }

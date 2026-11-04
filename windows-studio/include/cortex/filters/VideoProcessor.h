@@ -18,7 +18,8 @@ struct FilterSettings {
     AvatarFraming avatarFraming;
     float avatarSmoothing{.06f};
     float avatarSensitivity{1.3f};
-    bool avatarArms{true}, avatarMirror{true};
+    bool avatarArms{false}, avatarMirror{false}, avatarFollowPosition{true};
+    bool avatarFollowDistance{true};
     uint64_t avatarCalibration{};
     float backgroundZoom{1}, backgroundX{.5f}, backgroundY{.5f};
     bool backgroundFit{false};

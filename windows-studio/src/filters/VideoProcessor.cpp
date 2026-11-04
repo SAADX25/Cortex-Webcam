@@ -1,5 +1,6 @@
 #include "cortex/filters/VideoProcessor.h"
 #include "cortex/filters/RvmMatting.h"
+#include "cortex/filters/PoseSmoother.h"
 #include "GpuHelpers.h"
 #include <wincodec.h>
 #include <cmath>
@@ -34,6 +35,14 @@ struct VideoProcessor::Impl {
     std::unique_ptr<FaceTracker> tracker;
     std::chrono::steady_clock::time_point avatarStart, poseTime;
     AvatarPose smoothedPose, neutralPose;
+    PoseSmoother poseFilter;
+    std::chrono::steady_clock::time_point lastPoseSample{};
+    bool wasTracking{};
+    AvatarPose lastTrackedPose;
+    std::chrono::steady_clock::time_point lastTrackingTime{};
+    bool hasValidTracking{false};
+    bool hasNeutralPose{};
+    std::optional<uint16_t> trackingRotation;
     uint64_t calibration{};
     std::string trackingStatus{"Open Cortex Sender to track your face"};
     void draw(const GpuImage& image, ID3D11ShaderResourceView* mask, NormalizedRect rect,
@@ -150,6 +159,14 @@ void VideoProcessor::setAvatarModel(std::unique_ptr<AvatarModel> model) {
 }
 void VideoProcessor::setFaceTracker(std::unique_ptr<FaceTracker> tracker) {
     impl_->tracker = std::move(tracker);
+    impl_->hasNeutralPose = false;
+    impl_->hasValidTracking = false;
+    impl_->trackingRotation.reset();
+    impl_->smoothedPose = {};
+    impl_->poseFilter.reset();
+    impl_->lastPoseSample = {};
+    impl_->wasTracking = false;
+    impl_->poseTime = {};
 }
 void VideoProcessor::setOutputSize(uint32_t width, uint32_t height) {
     auto& s = *impl_;
@@ -199,8 +216,23 @@ void VideoProcessor::setSettings(const FilterSettings& settings) {
             if (source->matting)
                 source->matting->reset();
         }
-    if (settings.avatarEnabled && !impl_->settings.avatarEnabled)
+    if (settings.avatarEnabled && (!impl_->settings.avatarEnabled ||
+                                  (impl_->settings.avatarTestMotion && !settings.avatarTestMotion))) {
         impl_->avatarStart = std::chrono::steady_clock::now();
+        impl_->hasNeutralPose = false;
+        impl_->hasValidTracking = false;
+        impl_->smoothedPose = {};
+        impl_->poseFilter.reset();
+        impl_->lastPoseSample = {};
+        impl_->wasTracking = false;
+        impl_->poseTime = {};
+    }
+    if (settings.avatarMirror != impl_->settings.avatarMirror ||
+        settings.avatarFollowPosition != impl_->settings.avatarFollowPosition ||
+        settings.avatarFollowDistance != impl_->settings.avatarFollowDistance ||
+        settings.avatarSensitivity != impl_->settings.avatarSensitivity ||
+        settings.avatarSmoothing != impl_->settings.avatarSmoothing)
+        impl_->lastPoseSample = {};
     impl_->settings = settings;
 }
 void VideoProcessor::setMattingModel(const std::filesystem::path& model) {
@@ -281,16 +313,31 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
             targetPose.cameraDriven = true;
             targetPose.armsEnabled = s.settings.avatarArms;
             s.trackingStatus = "Waiting for phone camera - open Cortex Sender";
+            bool trackingFound = false;
+            bool recentered = false;
+            auto sampleAt = now;
             if (!scene.layers.empty() && scene.layers.front().frame &&
-                now - scene.layers.front().frame->readyAt < std::chrono::milliseconds(500)) {
+                now - scene.layers.front().frame->readyAt < std::chrono::milliseconds(250)) {
+                const auto rotation = scene.layers.front().frame->rotationDegrees;
+                if (!s.trackingRotation || *s.trackingRotation != rotation) {
+                    s.trackingRotation = rotation;
+                    s.hasNeutralPose = false;
+                    s.hasValidTracking = false;
+                }
                 if (!s.tracker)
                     s.tracker = makeFaceTracker(s.gpu);
                 s.tracker->setBodyTracking(s.settings.avatarArms);
                 if (auto landmarks = s.tracker->track(*scene.layers.front().frame)) {
                     if (auto measured = AvatarFilter::map(*landmarks)) {
-                        if (s.calibration != s.settings.avatarCalibration) {
+                        trackingFound = true;
+                        sampleAt = landmarks->capturedAt.time_since_epoch().count()
+                                       ? landmarks->capturedAt
+                                       : scene.layers.front().frame->readyAt;
+                        if (!s.hasNeutralPose || s.calibration != s.settings.avatarCalibration) {
                             s.neutralPose = *measured;
                             s.calibration = s.settings.avatarCalibration;
+                            s.hasNeutralPose = true;
+                            recentered = true;
                         }
                         targetPose = *measured;
                         targetPose.yaw = std::clamp((targetPose.yaw - s.neutralPose.yaw) *
@@ -302,6 +349,30 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
                         targetPose.roll = std::clamp((targetPose.roll - s.neutralPose.roll) *
                                                          s.settings.avatarSensitivity,
                                                      -30.f, 30.f);
+                        targetPose.browLY = std::clamp(targetPose.browLY - s.neutralPose.browLY,
+                                                       -1.f, 1.f);
+                        targetPose.browRY = std::clamp(targetPose.browRY - s.neutralPose.browRY,
+                                                       -1.f, 1.f);
+                        targetPose.mouthForm = std::clamp(targetPose.mouthForm -
+                                                             s.neutralPose.mouthForm,
+                                                         -1.f, 1.f);
+                        targetPose.positionX = s.settings.avatarFollowPosition
+                                                   ? std::clamp(targetPose.positionX -
+                                                                    s.neutralPose.positionX,
+                                                                -.4f, .4f)
+                                                   : 0;
+                        targetPose.positionY = s.settings.avatarFollowPosition
+                                                   ? std::clamp(targetPose.positionY -
+                                                                    s.neutralPose.positionY,
+                                                                -.4f, .4f)
+                                                   : 0;
+                        targetPose.depthScale = s.settings.avatarFollowDistance &&
+                                                        s.neutralPose.headDepth > 0 &&
+                                                        targetPose.headDepth > 0
+                                                    ? std::clamp(s.neutralPose.headDepth /
+                                                                     targetPose.headDepth,
+                                                                 .7f, 1.5f)
+                                                    : 1.f;
                     }
                 }
                 targetPose.armsEnabled = s.settings.avatarArms;
@@ -311,11 +382,14 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
                     targetPose.bodyAngleX = body.bodyAngleX;
                     targetPose.bodyAngleY = body.bodyAngleY;
                     targetPose.bodyAngleZ = body.bodyAngleZ;
+                } else {
+                    targetPose.arms = {};
                 }
                 if (s.settings.avatarMirror) {
                     targetPose.yaw = -targetPose.yaw;
                     targetPose.roll = -targetPose.roll;
                     targetPose.gazeX = -targetPose.gazeX;
+                    targetPose.positionX = -targetPose.positionX;
                     targetPose.bodyAngleX = -targetPose.bodyAngleX;
                     targetPose.bodyAngleZ = -targetPose.bodyAngleZ;
                     std::swap(targetPose.arms.left, targetPose.arms.right);
@@ -324,22 +398,72 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
                 }
                 s.trackingStatus = s.tracker->status();
             }
+            if (trackingFound) {
+                s.lastTrackedPose = targetPose;
+                s.lastTrackingTime = sampleAt;
+                s.hasValidTracking = true;
+            } else if (s.hasValidTracking) {
+                // Briefly bridge a missed frame, then ease back instead of freezing
+                // a stale face pose for a full second after the person leaves view.
+                const auto gap = std::chrono::duration<float>(now - s.lastTrackingTime).count();
+                constexpr float gracePeriod = .12f;
+                constexpr float decayPeriod = .35f;
+                if (gap <= gracePeriod) {
+                    targetPose = s.lastTrackedPose;
+                } else if (gap <= gracePeriod + decayPeriod) {
+                    AvatarPose neutralTarget;
+                    neutralTarget.cameraDriven = true;
+                    neutralTarget.armsEnabled = s.settings.avatarArms;
+                    neutralTarget.eyeOpen = 1.0f;
+                    targetPose = smoothAvatarPose(s.lastTrackedPose, neutralTarget,
+                                                  gap - gracePeriod, .12f);
+                } else {
+                    s.hasValidTracking = false;
+                }
+            }
+            if (!s.settings.avatarFollowPosition)
+                targetPose.positionX = targetPose.positionY = 0;
+            if (!s.settings.avatarFollowDistance)
+                targetPose.depthScale = 1;
             const float dt =
                 s.poseTime.time_since_epoch().count() == 0
                     ? 1.f / 30
                     : std::clamp(std::chrono::duration<float>(now - s.poseTime).count(), 0.f, .1f);
             s.poseTime = now;
-            // Faster eyelids preserve natural blinks while head motion stays smooth.
-            pose = smoothAvatarPose(s.smoothedPose, targetPose, dt, s.settings.avatarSmoothing);
-            const auto fast = smoothAvatarPose(s.smoothedPose, targetPose, dt,
-                                               std::min(.020f, s.settings.avatarSmoothing));
-            pose.eyeOpen = fast.eyeOpen;
-            pose.leftEyeOpen = fast.leftEyeOpen;
-            pose.rightEyeOpen = fast.rightEyeOpen;
+            if (recentered) {
+                s.poseFilter.reset(targetPose);
+                pose = targetPose;
+            } else if (trackingFound) {
+                if (!s.wasTracking)
+                    s.poseFilter.reset(s.smoothedPose);
+                if (sampleAt != s.lastPoseSample) {
+                    const float sampleDt = s.lastPoseSample.time_since_epoch().count()
+                                               ? std::clamp(std::chrono::duration<float>(
+                                                                sampleAt - s.lastPoseSample).count(),
+                                                            .001f, .5f)
+                                               : 1.f / 30;
+                    pose = s.poseFilter.update(targetPose, sampleDt, s.settings.avatarSmoothing);
+                } else {
+                    // A render tick is not a new camera measurement. Reusing a
+                    // result must not repeatedly amplify its estimated velocity.
+                    pose = s.smoothedPose;
+                }
+            } else {
+                if (s.wasTracking)
+                    s.poseFilter.reset(s.smoothedPose);
+                pose = s.poseFilter.update(targetPose, dt, s.settings.avatarSmoothing);
+            }
+            s.lastPoseSample = trackingFound ? sampleAt : std::chrono::steady_clock::time_point{};
+            s.wasTracking = trackingFound;
             s.smoothedPose = pose;
             std::ostringstream values;
             values << " | Head " << std::fixed << std::setprecision(0) << pose.yaw << " / "
                    << pose.pitch << " / " << pose.roll;
+            if (s.settings.avatarFollowPosition)
+                values << " | Position " << pose.positionX * 100 << "% / "
+                       << pose.positionY * 100 << "%";
+            if (s.settings.avatarFollowDistance)
+                values << " | Distance " << std::setprecision(2) << pose.depthScale << "x";
             s.trackingStatus += values.str();
         }
     }
@@ -391,12 +515,15 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     if (background.view && !s.settings.transparent)
         s.draw(background, nullptr, {}, true);
     if (s.settings.avatarEnabled) {
-        if (s.settings.avatarMode == 1 && s.avatarModel) {
-            s.avatarModel->setAnimation(s.settings.avatarMotion, s.settings.avatarExpression);
-            s.avatarModel->setFraming(s.settings.avatarFraming);
-            s.avatarModel->draw(context, pose, s.target.width, s.target.height);
-        } else
+        if (s.settings.avatarMode == 1) {
+            if (s.avatarModel) {
+                s.avatarModel->setAnimation(s.settings.avatarMotion, s.settings.avatarExpression);
+                s.avatarModel->setFraming(s.settings.avatarFraming);
+                s.avatarModel->draw(context, pose, s.target.width, s.target.height);
+            }
+        } else {
             s.avatar->draw(pose, s.target.width, s.target.height, s.settings.avatarFraming);
+        }
     } else if (s.settings.removal != RemovalMode::BackgroundOnly)
         for (const auto& layer : scene.layers)
             if (layer.frame) {

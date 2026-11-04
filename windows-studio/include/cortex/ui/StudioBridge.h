@@ -27,7 +27,9 @@ enum CortexAvatarControl {
     CortexAvatarRecenter = 28,
     CortexAvatarSensitivity = 29,
     CortexAvatarArms = 30,
-    CortexAvatarMirror = 31
+    CortexAvatarMirror = 31,
+    CortexAvatarFollowPosition = 32,
+    CortexAvatarFollowDistance = 33
 };
 extern "C" {
 #ifdef CORTEX_STUDIO_NATIVE_BUILD

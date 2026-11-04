@@ -140,12 +140,23 @@ int main(int argc, char** argv) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         const auto start = std::chrono::steady_clock::now();
         while (!face && std::chrono::steady_clock::now() < deadline) {
+            frame->readyAt = std::chrono::steady_clock::now();
             frame->sourceTimestamp90k += 3000;
             face = tracker->track(*frame);
             std::this_thread::sleep_for(std::chrono::milliseconds(35));
         }
         std::cout << tracker->status() << '\n';
         check(face.has_value(), "ONNX must detect the actual astronaut face in NV12 array slice 1");
+        check(face->imageWidth == 512 && face->imageHeight == 512,
+              "Tracked face must retain upright image dimensions for position following");
+        check(std::isfinite(face->gazeX) && std::isfinite(face->gazeY) &&
+                  std::abs(face->gazeX) <= 1 && std::abs(face->gazeY) <= 1 &&
+                  tracker->status().find("Quality tracking") != std::string::npos &&
+                  tracker->status().find("Pupil gaze") != std::string::npos &&
+                  face->headDepth > 0 && face->hasHeadPosition &&
+                  face->capturedAt.time_since_epoch().count() != 0,
+              "The quality model, pupil inference and fitted spatial head pose must run on a real image");
+        std::cout << "Pupil gaze=" << face->gazeX << ',' << face->gazeY << '\n';
         std::cout << "Initial detection ms="
                   << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                                start)
@@ -162,18 +173,23 @@ int main(int argc, char** argv) {
         std::cout << "Head " << pose->yaw << "," << pose->pitch << "," << pose->roll << '\n';
         check(pose && std::isfinite(pose->yaw) && pose->leftEyeOpen >= 0 && pose->rightEyeOpen <= 1,
               "Detected facial features must produce a finite live pose");
-        tracker.reset();
         frame = imageFrame(gpu, std::filesystem::path(argv[2]), true);
-        tracker = makeFaceTracker(gpu, std::filesystem::path(argv[1]));
+        check(!tracker->track(*frame),
+              "Changing rotation on the same tracker must invalidate the old face immediately");
         face.reset();
         const auto rotateDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!face && std::chrono::steady_clock::now() < rotateDeadline) {
+            frame->readyAt = std::chrono::steady_clock::now();
             frame->sourceTimestamp90k += 3000;
             face = tracker->track(*frame);
             std::this_thread::sleep_for(std::chrono::milliseconds(35));
         }
         check(face && face->leftEye.x > 175 && face->leftEye.y < 150 && face->leftEye.y > 65,
               "Rotation metadata must restore upright facial landmarks before inference");
+        frame->readyAt = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        check(!tracker->track(*frame),
+              "A stale camera texture must not refresh or replay a previously tracked face");
         // A blank image must clear the last face instead of synthesizing landmarks.
         std::vector<uint8_t> blank(512 * 512 * 3 / 2, 128);
         {
@@ -183,6 +199,7 @@ int main(int argc, char** argv) {
         bool cleared = false;
         const auto noFaceDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         while (!cleared && std::chrono::steady_clock::now() < noFaceDeadline) {
+            frame->readyAt = std::chrono::steady_clock::now();
             frame->sourceTimestamp90k += 3000;
             const auto value = tracker->track(*frame);
             cleared = !value && tracker->status().starts_with("Face not found");
@@ -201,37 +218,91 @@ int main(int argc, char** argv) {
         auto recording = std::make_unique<RecordingAvatar>();
         auto* recorded = recording.get();
         processor.setAvatarModel(std::move(recording));
-        processor.setFaceTracker(std::make_unique<FixtureTracker>());
+        auto fixtureTracker = std::make_unique<FixtureTracker>();
+        auto* controlled = fixtureTracker.get();
+        controlled->face.imageWidth = controlled->face.imageHeight = 512;
+        controlled->face.headRotation = HeadRotation{0, 45, 0};
+        controlled->face.needsHeadFit = true;
+        processor.setFaceTracker(std::move(fixtureTracker));
         FilterSettings settings;
         settings.avatarEnabled = true;
         settings.avatarMode = 1;
         settings.avatarSmoothing = 0;
+        settings.avatarArms = true;
         settings.avatarSensitivity = 1;
         settings.avatarMirror = false;
+        controlled->face.headDepth = 5;
         processor.setSettings(settings);
         frame->readyAt = std::chrono::steady_clock::now();
         SceneSnapshot scene{{{SourceId::Phone, frame, {}}}};
         processor.render(scene);
-        check(recorded->pose.yaw > 10 && recorded->pose.mouth > .9f &&
+        check(std::abs(recorded->pose.pitch) < .001f &&
+                  std::abs(recorded->pose.positionX) < .001f,
+              "The first physical head pose must automatically establish neutral framing");
+        controlled->face.headRotation = HeadRotation{20, 35, 0};
+        controlled->face.headDepth = 3.5f;
+        controlled->face.gazeX = .35f;
+        for (auto* point : {&controlled->face.leftEye, &controlled->face.rightEye,
+                            &controlled->face.nose, &controlled->face.upperLip,
+                            &controlled->face.lowerLip}) {
+            point->x += 48;
+            point->y += 32;
+        }
+        frame->readyAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        check(recorded->pose.yaw > 19.9f && std::abs(recorded->pose.pitch + 10) < .001f &&
+                  recorded->pose.depthScale > 1.42f && recorded->pose.gazeX == .35f &&
+                  recorded->pose.positionX > .09f && recorded->pose.positionY > .06f &&
+                  recorded->pose.mouth > .9f &&
                   recorded->pose.leftEyeOpen == 0 && recorded->pose.armsEnabled &&
                   recorded->pose.arms.left.bend > .69f,
-              "Camera pose, mouth and blink must reach the rendered avatar");
+              "Physical head deltas beyond the model range, position, mouth and blink must reach the avatar");
 
         // Test mirrored camera orientation
         settings.avatarMirror = true;
         processor.setSettings(settings);
         processor.render(scene);
-        check(recorded->pose.yaw < -10 && recorded->pose.mouth > .9f &&
+        check(recorded->pose.yaw < -19.9f && recorded->pose.positionX < -.09f &&
+                  recorded->pose.gazeX == -.35f &&
+                  recorded->pose.positionY > .06f && recorded->pose.mouth > .9f &&
                   recorded->pose.rightEyeOpen == 0 && recorded->pose.armsEnabled &&
                   recorded->pose.arms.right.bend > .69f,
               "Mirrored camera pose must invert yaw and swap eyes/arms");
+
+        settings.avatarFollowPosition = false;
+        processor.setSettings(settings);
+        processor.render(scene);
+        check(std::abs(recorded->pose.positionX) < .001f &&
+                  std::abs(recorded->pose.positionY) < .001f && recorded->pose.yaw < -19.9f,
+              "Disabling position following must keep head rotation active");
+        settings.avatarFollowDistance = false;
+        processor.setSettings(settings);
+        processor.render(scene);
+        check(recorded->pose.depthScale == 1 && recorded->pose.yaw < -19.9f,
+              "Distance following must be independently switchable without losing head rotation");
+        settings.avatarFollowDistance = true;
+        settings.avatarFollowPosition = true;
 
         settings.avatarCalibration = 1;
         processor.setSettings(settings);
         processor.render(scene);
         check(std::abs(recorded->pose.yaw) < .001f && std::abs(recorded->pose.pitch) < .001f &&
-                  recorded->pose.mouth > .9f,
-              "Recenter must zero only head angles, preserving mouth and blink");
+                  std::abs(recorded->pose.positionX) < .001f &&
+                  std::abs(recorded->pose.positionY) < .001f && recorded->pose.mouth > .9f,
+              "Recenter must zero head angles and position, preserving mouth and blink");
+        check(recorded->pose.depthScale == 1, "Recenter must establish the reference camera distance");
+        settings.avatarSmoothing = .06f;
+        processor.setSettings(settings);
+        controlled->face.capturedAt = std::chrono::steady_clock::now();
+        controlled->face.headRotation = HeadRotation{5, 35, 0};
+        frame->readyAt = controlled->face.capturedAt;
+        processor.render(scene);
+        const auto once = recorded->pose;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        frame->readyAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        check(recorded->pose.yaw == once.yaw && recorded->pose.depthScale == once.depthScale,
+              "Rendering the same inference twice must not manufacture new motion samples");
         settings.avatarTestMotion = true;
         processor.setSettings(settings);
         processor.render(scene);

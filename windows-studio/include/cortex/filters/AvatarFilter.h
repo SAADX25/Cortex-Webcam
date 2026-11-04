@@ -3,6 +3,7 @@
 #include <optional>
 #include <filesystem>
 #include <string>
+#include <stop_token>
 
 namespace cortex {
 // Position offsets are fractions of the output frame; positive Y moves down.
@@ -29,6 +30,9 @@ struct AvatarPose {
     bool cameraDriven{};
     bool armsEnabled{};
     UpperBodyPose arms;
+    // Fractions of the output frame; positive X is right and positive Y is down.
+    float positionX{}, positionY{};
+    float depthScale{1}, headDepth{};
 };
 
 struct LandmarkPoint {
@@ -43,6 +47,12 @@ struct FaceLandmarks {
     float mouthOpenY{}, mouthForm{};
     std::optional<HeadRotation> headRotation;
     bool needsHeadFit{};
+    // Upright image dimensions for normalized face movement. Zero means unavailable.
+    unsigned imageWidth{}, imageHeight{};
+    float headDepth{};
+    bool hasHeadPosition{};
+    float headPositionX{}, headPositionY{};
+    std::chrono::steady_clock::time_point capturedAt;
 };
 
 class FaceTracker {
@@ -64,7 +74,8 @@ public:
 
 bool isCubismSupported();
 std::unique_ptr<AvatarModel> loadAvatarModel(std::shared_ptr<GpuDevice> gpu,
-                                             const std::filesystem::path& path);
+                                             const std::filesystem::path& path,
+                                             std::stop_token stop = {});
 std::unique_ptr<FaceTracker> makeFaceTracker(std::shared_ptr<GpuDevice> gpu = nullptr,
                                              const std::filesystem::path& modelDirectory = {});
 

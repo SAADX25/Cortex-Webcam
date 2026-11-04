@@ -36,7 +36,7 @@ UdpH264Source::UdpH264Source(std::shared_ptr<GpuDevice> gpu, UdpSourceConfig con
     : gpu_(std::move(gpu))
     , config_(std::move(config)) {
     if (!gpu_ || !config_.port || config_.reorderWindow.count() < 0 ||
-        config_.reorderWindow > std::chrono::milliseconds(50))
+        config_.reorderWindow > std::chrono::milliseconds(250))
         throw std::invalid_argument("Invalid UDP source configuration");
 }
 UdpH264Source::~UdpH264Source() {
@@ -102,13 +102,14 @@ void UdpH264Source::run() noexcept {
         networkCheck(setsockopt(socket.value, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
                                 reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) == 0,
                      "Exclusive bind");
-        // Absorb a burst of fragmented IDR packets while the GPU submits work.
-        // This is socket capacity, not an intentional frame/jitter queue.
-        int receiveBytes = 1024 * 1024;
+        // Absorb bursts of fragmented IDR packets and network jitter.
+        int receiveBytes = 4 * 1024 * 1024;
         networkCheck(setsockopt(socket.value, SOL_SOCKET, SO_RCVBUF,
                                 reinterpret_cast<const char*>(&receiveBytes),
                                 sizeof(receiveBytes)) == 0,
                      "Receive buffer");
+        u_long nonBlocking = 1;
+        networkCheck(ioctlsocket(socket.value, FIONBIO, &nonBlocking) == 0, "Non-blocking socket");
         sockaddr_in local{};
         local.sin_family = AF_INET;
         local.sin_port = htons(config_.port);
@@ -166,18 +167,25 @@ void UdpH264Source::run() noexcept {
             const int selected = select(0, &ready, nullptr, nullptr, &timeout);
             networkCheck(selected != SOCKET_ERROR, "Wait for UDP");
             if (selected > 0) {
-                sockaddr_in peer{};
-                int size = sizeof(peer);
-                const int count = recvfrom(socket.value, reinterpret_cast<char*>(datagram.data()),
-                                           static_cast<int>(datagram.size()), 0,
-                                           reinterpret_cast<sockaddr*>(&peer), &size);
-                if (count == SOCKET_ERROR && WSAGetLastError() == WSAEMSGSIZE)
-                    continue;
-                networkCheck(count != SOCKET_ERROR, "Receive UDP");
-                const auto automaticPeer = autoPeer_.load();
-                if ((!allowed || peer.sin_addr.s_addr == allowed->s_addr) &&
-                    (!automaticPeer || peer.sin_addr.s_addr == automaticPeer))
-                    rtp.push(std::span(datagram.data(), static_cast<size_t>(count)), Clock::now());
+                while (!stopping_) {
+                    sockaddr_in peer{};
+                    int size = sizeof(peer);
+                    const int count = recvfrom(socket.value, reinterpret_cast<char*>(datagram.data()),
+                                               static_cast<int>(datagram.size()), 0,
+                                               reinterpret_cast<sockaddr*>(&peer), &size);
+                    if (count == SOCKET_ERROR) {
+                        const int err = WSAGetLastError();
+                        if (err == WSAEWOULDBLOCK)
+                            break;
+                        if (err == WSAEMSGSIZE)
+                            continue;
+                        networkCheck(false, "Receive UDP");
+                    }
+                    const auto automaticPeer = autoPeer_.load();
+                    if ((!allowed || peer.sin_addr.s_addr == allowed->s_addr) &&
+                        (!automaticPeer || peer.sin_addr.s_addr == automaticPeer))
+                        rtp.push(std::span(datagram.data(), static_cast<size_t>(count)), Clock::now());
+                }
             }
             rtp.tick(Clock::now());
             const auto stats = rtp.stats();

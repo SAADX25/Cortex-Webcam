@@ -32,6 +32,7 @@ struct TrackingImage {
     unsigned width{}, height{};
     std::vector<uint8_t> rgba;
     Clock::time_point captured;
+    uint64_t generation{}, bodyGeneration{};
 };
 struct Box {
     float x{}, y{}, width{}, height{};
@@ -60,25 +61,29 @@ class OnnxFaceTracker final : public FaceTracker {
     ComPtr<ID3D11RasterizerState> raster_;
     ComPtr<ID3D11SamplerState> sampler_;
     mutable std::mutex mutex_;
-    std::condition_variable wake_;
-    std::optional<TrackingImage> pending_;
+    std::condition_variable wake_, bodyWake_;
+    std::optional<TrackingImage> pending_, pendingBody_;
     Result result_;
     std::string status_{"Loading face tracking models"};
     bool closing_{};
+    uint64_t inputGeneration_{}, bodyGeneration_{};
     std::atomic<bool> failed_{};
     std::atomic<bool> bodyEnabled_{};
     UpperBodyPose body_;
     Clock::time_point bodyTime_{};
     std::string bodyStatus_;
     Clock::time_point lastSubmit_{};
+    Clock::time_point nextBodySubmit_{};
     int64_t lastTimestamp_{INT64_MIN};
     ID3D11Texture2D* lastTexture_{};
-    std::thread worker_;
+    unsigned lastWidth_{}, lastHeight_{};
+    int lastRotation_{-1};
+    std::thread worker_, bodyWorker_;
 
     TrackingImage capture(const VideoFrame& frame) {
         const auto rgb =
             converter_.convert(frame);  // Handles NV12 array slices and phone rotation.
-        const float ratio = std::min(1.f, 512.f / std::max(rgb.width, rgb.height));
+        const float ratio = std::min(1.f, 768.f / std::max(rgb.width, rgb.height));
         const auto width = std::max(1u, static_cast<unsigned>(rgb.width * ratio));
         const auto height = std::max(1u, static_cast<unsigned>(rgb.height * ratio));
         std::lock_guard lock(gpu_->mutex);
@@ -140,7 +145,7 @@ class OnnxFaceTracker final : public FaceTracker {
         context->OMSetRenderTargets(0, nullptr, nullptr);
         context->CopyResource(staging_.Get(), small_.texture.Get());
         TrackingImage image{width, height, std::vector<uint8_t>(size_t(width) * height * 4),
-                            Clock::now()};
+                            frame.readyAt};
         D3D11_MAPPED_SUBRESOURCE map{};
         detail::hr(context->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &map), "Tracking map");
         for (unsigned y = 0; y < height; ++y)
@@ -179,8 +184,8 @@ class OnnxFaceTracker final : public FaceTracker {
         }
     }
     static std::vector<Ort::Value> run(Ort::Session& session, const char* name,
-                                       std::vector<float>& data) {
-        const std::array<int64_t, 4> shape{1, 3, 224, 224};
+                                       std::vector<float>& data,
+                                       const std::array<int64_t, 4>& shape = {1, 3, 224, 224}) {
         const auto memory = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         auto tensor = Ort::Value::CreateTensor<float>(memory, data.data(), data.size(),
                                                       shape.data(), shape.size());
@@ -194,6 +199,101 @@ class OnnxFaceTracker final : public FaceTracker {
         return session.Run(Ort::RunOptions{nullptr}, &name, &tensor, 1, pointers.data(),
                            pointers.size());
     }
+    struct EyeCrop {
+        LandmarkPoint corner, axis;
+        float span{};
+        bool flipped{};
+    };
+    static std::optional<std::pair<float, float>> gaze(
+        Ort::Session& session, const char* name, const TrackingImage& image,
+        const std::array<LandmarkPoint, 66>& points, float leftOpen, float rightOpen,
+        std::vector<float>& tensor) {
+        constexpr unsigned size = 32, plane = size * size;
+        constexpr float mean[]{.485f, .456f, .406f}, sd[]{.229f, .224f, .225f};
+        std::array<EyeCrop, 2> eyes;
+        tensor.resize(2 * 3 * plane);
+        for (int eye = 0; eye < 2; ++eye) {
+            const auto first = points[eye == 0 ? 36 : 42];
+            const auto last = points[eye == 0 ? 39 : 45];
+            const float span = std::hypot(last.x - first.x, last.y - first.y);
+            if (!std::isfinite(span) || span < 5)
+                return {};
+            const LandmarkPoint axis{(last.x - first.x) / span, (last.y - first.y) / span};
+            eyes[eye] = {first, axis, span, eye == 1};
+            for (unsigned y = 0; y < size; ++y)
+                for (unsigned x = 0; x < size; ++x) {
+                    // Affine equivalent of upstream's eye rotation/crop and
+                    // second-eye horizontal flip, without a full-frame copy.
+                    float ex = -.2f * span + (x + .5f) * (1.4f * span / size) - .5f;
+                    if (eye == 1)
+                        ex = 1.2f * span - (x + .5f) * (1.4f * span / size) - .5f;
+                    const float ey = -.6f * span + (y + .5f) * (1.2f * span / size) - .5f;
+                    const float sx = std::clamp(first.x + axis.x * ex - axis.y * ey,
+                                                0.f, float(image.width - 1));
+                    const float sy = std::clamp(first.y + axis.y * ex + axis.x * ey,
+                                                0.f, float(image.height - 1));
+                    const auto x0 = static_cast<unsigned>(sx), y0 = static_cast<unsigned>(sy);
+                    const auto x1 = std::min(x0 + 1, image.width - 1),
+                               y1 = std::min(y0 + 1, image.height - 1);
+                    for (unsigned c = 0; c < 3; ++c) {
+                        const auto at = [&](unsigned px, unsigned py) {
+                            return float(image.rgba[(size_t(py) * image.width + px) * 4 + c]);
+                        };
+                        const float value = std::lerp(std::lerp(at(x0, y0), at(x1, y0), sx - x0),
+                                                       std::lerp(at(x0, y1), at(x1, y1), sx - x0),
+                                                       sy - y0);
+                        // The gaze network uses N,C,X,Y, unlike the face model.
+                        tensor[eye * 3 * plane + c * plane + x * size + y] =
+                            (value / 255 - mean[c]) / sd[c];
+                    }
+                }
+        }
+        const auto outputs = run(session, name, tensor, {2, 3, 32, 32});
+        if (outputs.empty() || outputs[0].GetTensorTypeAndShapeInfo().GetShape() !=
+                                   std::vector<int64_t>{2, 3, 8, 8})
+            throw std::runtime_error("Unexpected OpenSeeFace gaze output");
+        const float* data = outputs[0].GetTensorData<float>();
+        float gazeX = 0, gazeY = 0, total = 0;
+        for (int eye = 0; eye < 2; ++eye) {
+            const float open = eye == 0 ? leftOpen : rightOpen;
+            const float* map = data + eye * 3 * 64;
+            const auto peak = std::max_element(map, map + 64);
+            const auto index = peak - map;
+            if (!std::isfinite(*peak) || *peak < .4f || open < .15f)
+                continue;
+            const auto offset = [](float value) {
+                value = std::clamp(value, .0000001f, .9999999f);
+                return 4.f * std::log(value / (1 - value));
+            };
+            float x = 4.f * float(index / 8) + offset(map[64 + index]);
+            const float y = 4.f * float(index % 8) + offset(map[128 + index]);
+            if (!std::isfinite(x) || !std::isfinite(y) || x < -2 || x > 34 || y < -2 || y > 34)
+                continue;
+            const auto& crop = eyes[eye];
+            if (crop.flipped)
+                x = 32 - x;
+            const float ex = -.2f * crop.span + x * 1.4f * crop.span / 32;
+            const float ey = -.6f * crop.span + y * 1.2f * crop.span / 32;
+            const LandmarkPoint pupil{crop.corner.x + crop.axis.x * ex - crop.axis.y * ey,
+                                       crop.corner.y + crop.axis.y * ex + crop.axis.x * ey};
+            LandmarkPoint center{};
+            const int start = eye == 0 ? 36 : 42;
+            for (int lid : {1, 2, 4, 5}) {
+                center.x += points[start + lid].x * .25f;
+                center.y += points[start + lid].y * .25f;
+            }
+            const float px = pupil.x - center.x, py = pupil.y - center.y;
+            const float weight = *peak * std::clamp(open, 0.f, 1.f);
+            gazeX += weight * std::clamp((px * crop.axis.x + py * crop.axis.y) /
+                                           crop.span * 4.f,
+                                       -1.f, 1.f);
+            gazeY += weight * std::clamp((px * crop.axis.y - py * crop.axis.x) /
+                                           crop.span * 4.f,
+                                       -1.f, 1.f);
+            total += weight;
+        }
+        return total > 0 ? std::optional(std::pair{gazeX / total, gazeY / total}) : std::nullopt;
+    }
     static Box clampBox(Box b, const TrackingImage& image) {
         const float right = std::clamp(b.x + b.width, 0.f, float(image.width));
         const float bottom = std::clamp(b.y + b.height, 0.f, float(image.height));
@@ -202,6 +302,50 @@ class OnnxFaceTracker final : public FaceTracker {
         b.width = std::max(0.f, right - b.x);
         b.height = std::max(0.f, bottom - b.y);
         return b;
+    }
+    void workBody(const std::filesystem::path& directory) noexcept {
+        std::unique_ptr<BodyTracker> tracker;
+        Clock::time_point retry{};
+        for (;;) {
+            TrackingImage image;
+            {
+                std::unique_lock lock(mutex_);
+                bodyWake_.wait(lock, [&] { return closing_ || pendingBody_.has_value(); });
+                if (closing_)
+                    return;
+                image = std::move(*pendingBody_);
+                pendingBody_.reset();
+                if (!bodyEnabled_ || image.generation != inputGeneration_ ||
+                    image.bodyGeneration != bodyGeneration_)
+                    continue;
+            }
+            if (!bodyEnabled_ || Clock::now() - image.captured > std::chrono::milliseconds(250))
+                continue;
+            try {
+                if (!tracker && Clock::now() >= retry)
+                    tracker = std::make_unique<BodyTracker>(directory.parent_path() / "upper-body");
+                if (!tracker)
+                    continue;
+                const auto body = tracker->track(image.rgba, image.width, image.height);
+                std::lock_guard lock(mutex_);
+                if (bodyEnabled_ && image.generation == inputGeneration_ &&
+                    image.bodyGeneration == bodyGeneration_) {
+                    body_ = body;
+                    bodyTime_ = image.captured;
+                    const int arms = (body.left.confidence >= .6f ? 1 : 0) +
+                                     (body.right.confidence >= .6f ? 1 : 0);
+                    bodyStatus_ = "Arms " + std::to_string(arms) +
+                                  (arms == 2 ? "/2 visible" : "/2 - show elbows/wrists");
+                }
+            } catch (const std::exception&) {
+                std::lock_guard lock(mutex_);
+                if (image.generation == inputGeneration_ && image.bodyGeneration == bodyGeneration_) {
+                    body_ = {};
+                    bodyStatus_ = "Arm tracking unavailable - check upper-body models";
+                }
+                retry = Clock::now() + std::chrono::seconds(5);
+            }
+        }
     }
     void work(const std::filesystem::path& directory) noexcept {
         try {
@@ -212,21 +356,32 @@ class OnnxFaceTracker final : public FaceTracker {
             options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
             options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
             const auto detectorPath = directory / "mnv3_detection_opt.onnx";
-            const auto landmarksPath = directory / "lm_model1_opt.onnx";
+            const bool qualityModel = std::filesystem::is_regular_file(directory / "lm_model3_opt.onnx");
+            const auto landmarksPath = directory / (qualityModel ? "lm_model3_opt.onnx" : "lm_model1_opt.onnx");
             if (!std::filesystem::is_regular_file(detectorPath) ||
                 !std::filesystem::is_regular_file(landmarksPath))
                 throw std::runtime_error(
                     "Face models missing: models/face-tracking (rebuild the package)");
             Ort::Session detector(env, detectorPath.c_str(), options),
                 landmarks(env, landmarksPath.c_str(), options);
+            std::unique_ptr<Ort::Session> gazeModel;
+            if (std::filesystem::is_regular_file(directory / "mnv3_gaze32_split_opt.onnx"))
+                try {
+                    gazeModel = std::make_unique<Ort::Session>(
+                        env, (directory / "mnv3_gaze32_split_opt.onnx").c_str(), options);
+                } catch (const Ort::Exception&) {
+                    // Face tracking remains usable when the optional eye model cannot load.
+                }
             Ort::AllocatorWithDefaultOptions allocator;
             const auto detectName = detector.GetInputNameAllocated(0, allocator);
             const auto landmarkName = landmarks.GetInputNameAllocated(0, allocator);
+            const std::string gazeName = gazeModel
+                                             ? gazeModel->GetInputNameAllocated(0, allocator).get()
+                                             : "";
             Box face{};
             unsigned count = 0, previousWidth = 0, previousHeight = 0;
-            std::vector<float> tensor;
-            std::unique_ptr<BodyTracker> bodyTracker;
-            Clock::time_point nextBody{}, bodyRetry{};
+            uint64_t previousGeneration = UINT64_MAX;
+            std::vector<float> tensor, gazeTensor;
             {
                 std::lock_guard lock(mutex_);
                 status_ = "Looking for your face";
@@ -240,9 +395,15 @@ class OnnxFaceTracker final : public FaceTracker {
                         return;
                     image = std::move(*pending_);
                     pending_.reset();
+                    if (image.generation != inputGeneration_)
+                        continue;
                 }
-                if (image.width != previousWidth || image.height != previousHeight) {
+                if (Clock::now() - image.captured > std::chrono::milliseconds(250))
+                    continue;
+                if (image.generation != previousGeneration || image.width != previousWidth ||
+                    image.height != previousHeight) {
                     face = {};
+                    previousGeneration = image.generation;
                     previousWidth = image.width;
                     previousHeight = image.height;
                 }
@@ -280,6 +441,7 @@ class OnnxFaceTracker final : public FaceTracker {
                         throw std::runtime_error("Unexpected OpenSeeFace landmark output");
                     const float* data = outputs[0].GetTensorData<float>();
                     std::array<LandmarkPoint, 66> points{};
+                    std::array<float, 66> pointConfidence{};
                     float confidence = 0;
                     bool valid = true;
                     constexpr int cells = 28 * 28;
@@ -298,6 +460,7 @@ class OnnxFaceTracker final : public FaceTracker {
                             float(index % 28) / 27 + logit(data[(132 + i) * cells + index]);
                         points[i] = {crop.x + crop.width * (223.f / 224) * x,
                                      crop.y + crop.height * (223.f / 224) * y};
+                        pointConfidence[i] = *peak;
                         confidence += *peak;
                         valid =
                             valid && std::isfinite(x) && std::isfinite(y) && std::isfinite(*peak);
@@ -327,39 +490,6 @@ class OnnxFaceTracker final : public FaceTracker {
                             return std::clamp((val - deadzone) / (1.f - 2.f * deadzone), 0.f, 1.f);
                         };
 
-                        // Pupil gaze estimation from eye contour centroid vs corner midpoint
-                        const auto gazeCalc = [&]() -> std::pair<float, float> {
-                            const float cx_l = (points[37].x + points[38].x + points[40].x + points[41].x) * 0.25f;
-                            const float cy_l = (points[37].y + points[38].y + points[40].y + points[41].y) * 0.25f;
-                            const float mid_x_l = (points[36].x + points[39].x) * 0.5f;
-                            const float mid_y_l = (points[36].y + points[39].y) * 0.5f;
-                            const float span_l = std::max(1.f, distance(36, 39));
-
-                            const float cx_r = (points[43].x + points[44].x + points[46].x + points[47].x) * 0.25f;
-                            const float cy_r = (points[43].y + points[44].y + points[46].y + points[47].y) * 0.25f;
-                            const float mid_x_r = (points[42].x + points[45].x) * 0.5f;
-                            const float mid_y_r = (points[42].y + points[45].y) * 0.5f;
-                            const float span_r = std::max(1.f, distance(42, 45));
-
-                            const float dx_l = (cx_l - mid_x_l) / span_l;
-                            const float dx_r = (cx_r - mid_x_r) / span_r;
-                            const float raw_gx = (dx_l + dx_r) * 0.5f;
-
-                            const float dy_l = (cy_l - mid_y_l) / span_l;
-                            const float dy_r = (cy_r - mid_y_r) / span_r;
-                            const float raw_gy = -((dy_l + dy_r) * 0.5f);
-
-                            constexpr float deadzone = 0.02f;
-                            constexpr float gain = 6.0f;
-                            float gx = 0.f;
-                            if (std::abs(raw_gx) > deadzone)
-                                gx = std::clamp((raw_gx - std::copysign(deadzone, raw_gx)) * gain, -1.f, 1.f);
-                            float gy = 0.f;
-                            if (std::abs(raw_gy) > deadzone)
-                                gy = std::clamp((raw_gy - std::copysign(deadzone, raw_gy)) * gain, -1.f, 1.f);
-                            return {gx, gy};
-                        };
-
                         // Eyebrow vertical movement: distance between eyebrow and eye relative to eye span
                         const auto browCalc = [&]() -> std::pair<float, float> {
                             const float eye_y_l = (points[36].y + points[39].y) * 0.5f;
@@ -372,7 +502,7 @@ class OnnxFaceTracker final : public FaceTracker {
                             const float span_r = std::max(1.f, distance(42, 45));
                             const float ratio_r = (eye_y_r - brow_y_r) / span_r;
 
-                            constexpr float neutralRatio = 0.60f;
+                            constexpr float neutralRatio = 0.90f;
                             constexpr float deadzone = 0.03f;
                             constexpr float gain = 3.5f;
 
@@ -389,6 +519,9 @@ class OnnxFaceTracker final : public FaceTracker {
                         };
 
                         FaceLandmarks f;
+                        f.imageWidth = image.width;
+                        f.imageHeight = image.height;
+                        f.capturedAt = image.captured;
                         f.leftEye = avg(36, 39);
                         f.rightEye = avg(42, 45);
                         f.nose = points[30];
@@ -397,9 +530,18 @@ class OnnxFaceTracker final : public FaceTracker {
                         f.leftEyeOpen = eye(36);
                         f.rightEyeOpen = eye(42);
                         f.eyeOpen = (f.leftEyeOpen + f.rightEyeOpen) * .5f;
-                        const auto [gx, gy] = gazeCalc();
-                        f.gazeX = gx;
-                        f.gazeY = gy;
+                        f.gazeX = f.gazeY = 0;
+                        if (gazeModel)
+                            try {
+                                if (const auto measured = gaze(*gazeModel, gazeName.c_str(), image,
+                                                               points, f.leftEyeOpen,
+                                                               f.rightEyeOpen, gazeTensor)) {
+                                    f.gazeX = measured->first;
+                                    f.gazeY = measured->second;
+                                }
+                            } catch (const std::exception&) {
+                                gazeModel.reset();
+                            }
                         const auto [bL, bR] = browCalc();
                         f.browLY = bL;
                         f.browRY = bR;
@@ -419,19 +561,30 @@ class OnnxFaceTracker final : public FaceTracker {
                             openY = std::clamp((openY - mouthDeadzone) / (1.f - mouthDeadzone), 0.f, 1.f);
                         f.mouthOpenY = openY;
 
-                        const float cornerY = (points[48].y + points[54].y) * 0.5f;
-                        const float lipMidY = (points[51].y + points[57].y) * 0.5f;
+                        // OpenSeeFace's 66-point mouth uses corners 58/62 and
+                        // outer center points 50/55, unlike the 68-point layout.
+                        const float cornerY = (points[58].y + points[62].y) * 0.5f;
+                        const float lipMidY = (points[50].y + points[55].y) * 0.5f;
                         const float cornerElev = (lipMidY - cornerY) / std::max(1.f, span);
-                        const float mouthWidth = distance(48, 54) / std::max(1.f, span);
-                        constexpr float neutralWidth = 0.45f;
-                        const float formRaw = cornerElev * 4.5f + (mouthWidth - neutralWidth) * 2.0f;
+                        const float mouthWidth = distance(58, 62) / std::max(1.f, span);
+                        constexpr float neutralWidth = 0.81f;
+                        constexpr float neutralCornerElevation = 0.07f;
+                        const float formRaw = (cornerElev - neutralCornerElevation) * 4.5f +
+                                              (mouthWidth - neutralWidth) * 2.0f;
                         constexpr float formDeadzone = 0.04f;
                         float form = 0.f;
                         if (std::abs(formRaw) > formDeadzone)
                             form = std::clamp((formRaw - std::copysign(formDeadzone, formRaw)) * 2.5f, -1.f, 1.f);
                         f.mouthForm = form;
 
-                        f.headRotation = estimateHeadRotation(points, image.width, image.height);
+                        if (const auto head = estimateHeadPose(points, image.width, image.height,
+                                                               1.f, &pointConfidence)) {
+                            f.headRotation = head->rotation;
+                            f.headDepth = head->depth;
+                            f.hasHeadPosition = true;
+                            f.headPositionX = head->positionX;
+                            f.headPositionY = head->positionY;
+                        }
                         f.needsHeadFit = true;
                         if (span > 4)
                             found = f;
@@ -446,37 +599,18 @@ class OnnxFaceTracker final : public FaceTracker {
                     } else
                         face = {};
                 }
-                if (bodyEnabled_ && Clock::now() >= nextBody) {
-                    nextBody = Clock::now() + std::chrono::milliseconds(80);
-                    try {
-                        if (!bodyTracker && Clock::now() >= bodyRetry)
-                            bodyTracker = std::make_unique<BodyTracker>(directory.parent_path() /
-                                                                        "upper-body");
-                        if (bodyTracker) {
-                            const auto body =
-                                bodyTracker->track(image.rgba, image.width, image.height);
-                            std::lock_guard lock(mutex_);
-                            body_ = body;
-                            bodyTime_ = image.captured;
-                            const int arms = (body.left.confidence >= .6f ? 1 : 0) +
-                                             (body.right.confidence >= .6f ? 1 : 0);
-                            bodyStatus_ = "Arms " + std::to_string(arms) +
-                                          (arms == 2 ? "/2 visible" : "/2 - show elbows/wrists");
-                        }
-                    } catch (const std::exception&) {
-                        std::lock_guard lock(mutex_);
-                        body_ = {};
-                        bodyStatus_ = "Arm tracking unavailable - check upper-body models";
-                        bodyRetry = Clock::now() + std::chrono::seconds(5);
-                    }
-                }
                 {
                     std::lock_guard lock(mutex_);
-                    result_ = {found, image.captured};
-                    status_ =
-                        found ? (found->headRotation ? "3D head, blink and mouth tracked"
-                                                     : "Face found - move closer for head rotation")
-                              : "Face not found - look toward the camera";
+                    if (image.generation == inputGeneration_) {
+                        result_ = {found, image.captured};
+                        status_ =
+                            found ? (found->headRotation ? "Head, blink and mouth tracked"
+                                                         : "Face found - move closer for head rotation")
+                                  : "Face not found - look toward the camera";
+                        if (found)
+                            status_ += std::string(qualityModel ? " | Quality tracking" : " | Fast tracking") +
+                                       (gazeModel ? " | Pupil gaze" : " | Gaze unavailable");
+                    }
                 }
             }
         } catch (const std::exception& error) {
@@ -494,6 +628,7 @@ public:
         , converter_(gpu_) {
         const auto directory = models.empty() ? defaultModels() : models;
         worker_ = std::thread([this, directory] { work(directory); });
+        bodyWorker_ = std::thread([this, directory] { workBody(directory); });
     }
     ~OnnxFaceTracker() override {
         {
@@ -501,12 +636,36 @@ public:
             closing_ = true;
         }
         wake_.notify_one();
+        bodyWake_.notify_one();
         if (worker_.joinable())
             worker_.join();
+        if (bodyWorker_.joinable())
+            bodyWorker_.join();
     }
     std::optional<FaceLandmarks> track(const VideoFrame& frame) override {
         const auto now = Clock::now();
+        if (frame.width != lastWidth_ || frame.height != lastHeight_ ||
+            frame.rotationDegrees != lastRotation_ ||
+            frame.sourceTimestamp90k < lastTimestamp_) {
+            std::lock_guard lock(mutex_);
+            ++inputGeneration_;
+            result_ = {};
+            pending_.reset();
+            pendingBody_.reset();
+            body_ = {};
+            bodyTime_ = {};
+            bodyStatus_.clear();
+            lastWidth_ = frame.width;
+            lastHeight_ = frame.height;
+            lastRotation_ = frame.rotationDegrees;
+            lastTexture_ = nullptr;
+            lastTimestamp_ = INT64_MIN;
+            lastSubmit_ = {};
+            nextBodySubmit_ = {};
+        }
         if (!failed_ && frame.texture && frame.gpu == gpu_ && frame.width && frame.height &&
+            now - frame.readyAt <= std::chrono::milliseconds(250) &&
+            now - lastSubmit_ >= std::chrono::milliseconds(15) &&
             (lastTexture_ != frame.texture.Get() || lastTimestamp_ != frame.sourceTimestamp90k)) {
             lastSubmit_ = now;
             lastTexture_ = frame.texture.Get();
@@ -515,10 +674,17 @@ public:
                 auto image = capture(frame);
                 {
                     std::lock_guard lock(mutex_);
+                    image.generation = inputGeneration_;
+                    image.bodyGeneration = bodyGeneration_;
                     pending_ = std::move(image);
+                    if (bodyEnabled_ && now >= nextBodySubmit_) {
+                        pendingBody_ = *pending_;
+                        nextBodySubmit_ = now + std::chrono::milliseconds(80);
+                    }
                 }
                 wake_
                     .notify_one();  // One pending image: inference never builds an unbounded queue.
+                bodyWake_.notify_one();
             } catch (const std::exception& error) {
                 std::lock_guard lock(mutex_);
                 result_ = {};
@@ -526,21 +692,31 @@ public:
             }
         }
         std::lock_guard lock(mutex_);
-        return now - result_.captured <= std::chrono::milliseconds(500) ? result_.landmarks
-                                                                        : std::nullopt;
+        return Clock::now() - result_.captured <= std::chrono::milliseconds(250) ? result_.landmarks
+                                                                          : std::nullopt;
     }
-    void setBodyTracking(bool enabled) override { bodyEnabled_ = enabled; }
+    void setBodyTracking(bool enabled) override {
+        if (bodyEnabled_.exchange(enabled) == enabled)
+            return;
+        std::lock_guard lock(mutex_);
+        ++bodyGeneration_;
+        pendingBody_.reset();
+        body_ = {};
+        bodyTime_ = {};
+        bodyStatus_.clear();
+        nextBodySubmit_ = {};
+    }
     std::optional<UpperBodyPose> upperBody() const override {
         std::lock_guard lock(mutex_);
-        if (!bodyEnabled_ || Clock::now() - bodyTime_ > std::chrono::milliseconds(350))
+        if (!bodyEnabled_ || Clock::now() - bodyTime_ > std::chrono::milliseconds(500))
             return {};
         return body_;
     }
     std::string status() const override {
         std::lock_guard lock(mutex_);
-        return status_ + (bodyEnabled_
-                              ? " | " + (bodyStatus_.empty() ? "Looking for arms" : bodyStatus_)
-                              : "");
+        if (result_.landmarks && Clock::now() - result_.captured > std::chrono::milliseconds(250))
+            return "Waiting for a fresh camera frame";
+        return bodyEnabled_ && !bodyStatus_.empty() ? status_ + " | " + bodyStatus_ : status_;
     }
 };
 #endif

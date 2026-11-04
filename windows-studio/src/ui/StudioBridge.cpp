@@ -7,6 +7,8 @@
 #include <dxgi1_3.h>
 #include <d3dcompiler.h>
 #include <thread>
+#include <future>
+#include <stop_token>
 #include <condition_variable>
 #include <atomic>
 #include <cmath>
@@ -151,7 +153,8 @@ struct Controls {
     uint64_t avatarRevision{};
     AvatarFraming avatarFraming;
     float avatarSmoothing{.06f}, avatarSensitivity{1.3f};
-    bool avatarArms{true}, avatarMirror{true};
+    bool avatarArms{false}, avatarMirror{false}, avatarFollowPosition{true};
+    bool avatarFollowDistance{true};
     uint64_t avatarCalibration{};
     std::filesystem::path avatarModelPath;
     bool output = false;
@@ -172,6 +175,7 @@ class Engine {
     bool closing = false;
     Controls controls;
     CortexStudioState state;
+    std::stop_source avatarLoadStop;
     std::thread worker;
     void failure(const std::string& message) {
         std::lock_guard lock(mutex);
@@ -219,6 +223,31 @@ class Engine {
             }
 
             bool avatarLoaded = false;
+            bool avatarFailed = false;
+            std::filesystem::path requestedAvatarPath;
+            uint64_t requestedAvatarRevision{};
+            struct AvatarLoadTask {
+                std::future<std::unique_ptr<AvatarModel>> future;
+                std::filesystem::path path;
+                uint64_t revision{};
+                std::jthread worker;
+
+                AvatarLoadTask(std::shared_ptr<GpuDevice> gpu, const Controls& request)
+                    : path(request.avatarModelPath), revision(request.avatarRevision) {
+                    std::promise<std::unique_ptr<AvatarModel>> completion;
+                    future = completion.get_future();
+                    worker = std::jthread(
+                        [gpu = std::move(gpu), p = path,
+                         result = std::move(completion)](std::stop_token stop) mutable {
+                            try {
+                                result.set_value(loadAvatarModel(gpu, p, stop));
+                            } catch (...) {
+                                result.set_exception(std::current_exception());
+                            }
+                        });
+                }
+            };
+            std::unique_ptr<AvatarLoadTask> pendingAvatar;
             for (;;) {
                 Controls current;
                 {
@@ -241,23 +270,16 @@ class Engine {
                         output.reset();
                     if (current.avatarModelPath != applied.avatarModelPath ||
                         current.avatarRevision != applied.avatarRevision) {
-                        if (!current.avatarModelPath.empty()) {
-                            try {
-                                auto m = loadAvatarModel(gpu, current.avatarModelPath);
-                                processor.setAvatarModel(std::move(m));
-                                avatarLoaded = true;
-                                {
-                                    std::lock_guard lock(mutex);
-                                    state.error[0] = 0;
-                                }
-                            } catch (const std::exception& error) {
-                                processor.setAvatarModel(nullptr);
-                                avatarLoaded = false;
-                                failure(error.what());
-                            }
-                        } else {
+                        if (pendingAvatar)
+                            pendingAvatar->worker.request_stop();
+                        avatarFailed = false;
+                        if (current.avatarModelPath.empty()) {
                             processor.setAvatarModel(nullptr);
                             avatarLoaded = false;
+                            requestedAvatarPath.clear();
+                            requestedAvatarRevision = current.avatarRevision;
+                            std::lock_guard lock(mutex);
+                            state.error[0] = 0;
                         }
                     }
                     if (current.model != applied.model && !current.model.empty()) {
@@ -291,6 +313,8 @@ class Engine {
                     filter.avatarSensitivity = current.avatarSensitivity;
                     filter.avatarArms = current.avatarArms;
                     filter.avatarMirror = current.avatarMirror;
+                    filter.avatarFollowPosition = current.avatarFollowPosition;
+                    filter.avatarFollowDistance = current.avatarFollowDistance;
                     filter.avatarCalibration = current.avatarCalibration;
                     filter.backgroundZoom = current.backgroundZoom;
                     filter.backgroundX = current.backgroundX;
@@ -303,6 +327,48 @@ class Engine {
                     filter.transparent = current.transparent;
                     processor.setSettings(filter);
                     applied = current;
+                }
+                if (pendingAvatar &&
+                    pendingAvatar->future.wait_for(std::chrono::milliseconds(0)) ==
+                        std::future_status::ready) {
+                    const bool wanted = !pendingAvatar->worker.get_stop_token().stop_requested() &&
+                                        pendingAvatar->path == current.avatarModelPath &&
+                                        pendingAvatar->revision == current.avatarRevision;
+                    try {
+                        auto m = pendingAvatar->future.get();
+                        if (wanted) {
+                            processor.setAvatarModel(std::move(m));
+                            avatarLoaded = true;
+                            avatarFailed = false;
+                            std::lock_guard lock(mutex);
+                            state.error[0] = 0;
+                        }
+                    } catch (const std::exception& error) {
+                        if (wanted) {
+                            processor.setAvatarModel(nullptr);
+                            avatarLoaded = false;
+                            avatarFailed = true;
+                            failure(error.what());
+                        }
+                    }
+                    pendingAvatar.reset();
+                }
+                // Keep at most one loader alive. Cancelling/replacing its future must
+                // never wait on the render thread; discard its result when it finishes.
+                if (!pendingAvatar && !current.avatarModelPath.empty() &&
+                    (requestedAvatarPath != current.avatarModelPath ||
+                     requestedAvatarRevision != current.avatarRevision)) {
+                    std::lock_guard lock(mutex);
+                    if (!closing && controls.avatarRevision == current.avatarRevision &&
+                        controls.avatarModelPath == current.avatarModelPath) {
+                        pendingAvatar = std::make_unique<AvatarLoadTask>(gpu, current);
+                        avatarLoadStop = pendingAvatar->worker.get_stop_source();
+                        requestedAvatarPath = current.avatarModelPath;
+                        requestedAvatarRevision = current.avatarRevision;
+                        avatarFailed = false;
+                        text(state.status, L"Live2D Avatar - Loading character...");
+                        state.error[0] = 0;
+                    }
                 }
                 // Reception is always armed while Studio is open, including when
                 // minimized. Transient socket/port failures retry without a Start button.
@@ -469,14 +535,25 @@ class Engine {
                     state.frameRatePending = controls.frameRate.id && !controls.frameRateCompleted;
                     state.phoneRateFallback = controls.frameRateFallback;
                     text(state.diagnostics, wide(source.detail));
+                    const bool avatarLoading = !current.avatarModelPath.empty() &&
+                                               !avatarFailed && pendingAvatar &&
+                                               (pendingAvatar->path != current.avatarModelPath ||
+                                                pendingAvatar->revision != current.avatarRevision ||
+                                                !pendingAvatar->worker.get_stop_token().stop_requested());
                     const wchar_t* st =
-                        current.avatarEnabled
-                            ? (current.avatarMode == 1 && avatarLoaded
-                                   ? (current.avatarTestMotion ? L"Live2D Avatar - Test motion"
-                                                               : L"Live2D Avatar - Camera tracking")
-                                   : (current.avatarTestMotion
-                                          ? L"GPU Test Avatar - Test motion"
-                                          : L"GPU Test Avatar - Camera tracking"))
+                        avatarLoading
+                            ? L"Live2D Avatar - Loading character..."
+                            : current.avatarEnabled
+                                   ? (current.avatarMode == 1
+                                          ? (avatarLoaded
+                                                 ? (current.avatarTestMotion ? L"Live2D Avatar - Test motion"
+                                                                             : L"Live2D Avatar - Camera tracking")
+                                                 : (avatarFailed
+                                                        ? L"Live2D Avatar - Failed to load character"
+                                                        : L"Live2D Avatar - Choose a character"))
+                                          : (current.avatarTestMotion
+                                                 ? L"GPU Test Avatar - Test motion"
+                                                 : L"GPU Test Avatar - Camera tracking"))
                             : (!scene.layers.empty()
                                    ? (current.mode == 3
                                           ? L"Background media active (Phone camera hidden)"
@@ -499,6 +576,9 @@ class Engine {
                 wake.wait_until(lock, tick + std::chrono::nanoseconds(1'000'000'000 / current.fps),
                                 [&] { return closing || controls.revision != applied.revision; });
             }
+            if (pendingAvatar)
+                pendingAvatar->worker.request_stop();
+            pendingAvatar.reset();
             discovery.reset();
             if (manager)
                 manager->stopAll();
@@ -526,6 +606,7 @@ public:
         {
             std::lock_guard lock(mutex);
             closing = true;
+            avatarLoadStop.request_stop();
         }
         wake.notify_all();
         if (worker.joinable())
@@ -635,6 +716,12 @@ public:
         case CortexAvatarMirror:
             controls.avatarMirror = value != 0;
             break;
+        case CortexAvatarFollowPosition:
+            controls.avatarFollowPosition = value != 0;
+            break;
+        case CortexAvatarFollowDistance:
+            controls.avatarFollowDistance = value != 0;
+            break;
         case 18:
             controls.backgroundFit = value != 0;
             break;
@@ -660,6 +747,9 @@ public:
         if (kind == 3)
             controls.model = path ? path : L"";
         else if (kind == 4) {
+            // Request directly from the controller thread, even if rendering is
+            // currently waiting for the model's GPU resources.
+            avatarLoadStop.request_stop();
             controls.avatarModelPath = path ? path : L"";
             ++controls.avatarRevision;
         } else {

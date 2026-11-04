@@ -5,6 +5,8 @@
 namespace cortex {
 namespace {
 constexpr size_t MaxAccessUnit = 4 * 1024 * 1024;
+constexpr size_t MaxPendingPackets = 1024;
+constexpr int MaxSequenceDelta = 1024;
 uint16_t u16(std::span<const uint8_t> b, size_t i) {
     return uint16_t((b[i] << 8) | b[i + 1]);
 }
@@ -23,7 +25,7 @@ void startCode(std::vector<uint8_t>& dst, std::span<const uint8_t> nal) {
 H264RtpReceiver::H264RtpReceiver(Sink sink, std::chrono::milliseconds reorder)
     : sink_(std::move(sink))
     , reorder_(reorder) {
-    if (!sink_ || reorder.count() < 0 || reorder > std::chrono::milliseconds(50))
+    if (!sink_ || reorder.count() < 0 || reorder > std::chrono::milliseconds(250))
         throw std::invalid_argument("Invalid RTP receiver configuration");
 }
 std::optional<H264RtpReceiver::Packet> H264RtpReceiver::parse(std::span<const uint8_t> b,
@@ -108,7 +110,7 @@ void H264RtpReceiver::push(std::span<const uint8_t> bytes, Clock::time_point now
         ++stats_.late;
         return;
     }
-    if (delta >= 64) {
+    if (delta >= MaxSequenceDelta) {
         stats_.gaps += uint64_t(delta);
         lose();
         pending_.clear();
@@ -127,7 +129,7 @@ void H264RtpReceiver::drain(Clock::time_point now) {
             auto oldest = std::min_element(
                 pending_.begin(), pending_.end(),
                 [](const auto& a, const auto& b) { return a.second.arrival < b.second.arrival; });
-            if (now - oldest->second.arrival < reorder_ && pending_.size() < 63)
+            if (now - oldest->second.arrival < reorder_ && pending_.size() < MaxPendingPackets - 1)
                 break;
             auto next = std::min_element(
                 pending_.begin(), pending_.end(), [&](const auto& a, const auto& b) {
