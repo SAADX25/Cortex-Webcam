@@ -26,7 +26,7 @@
           </Border>
           <TextBlock Text="CORTEX STUDIO" FontSize="12" FontWeight="Bold" Foreground="#F8FAFC" VerticalAlignment="Center" />
           <Border Background="#101F33" BorderBrush="#1C3554" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="10,0,0,0">
-            <TextBlock Text="0.9.3" FontSize="9" FontWeight="Bold" Foreground="#38BDF8" />
+            <TextBlock Text="0.9.7" FontSize="9" FontWeight="Bold" Foreground="#38BDF8" />
           </Border>
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" WindowChrome.IsHitTestVisibleInChrome="True">
@@ -320,7 +320,7 @@
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                   <StackPanel Margin="18,18,18,20">
                     <TextBlock Text="Avatar mode" Style="{StaticResource SectionTitle}" />
-                    <CheckBox x:Name="AvatarEnabled" Content="Use test avatar" Click="AvatarChanged" />
+                    <CheckBox x:Name="AvatarEnabled" Content="Enable avatar" Click="AvatarChanged" />
                     
                     <StackPanel x:Name="AvatarDetailsPanel" Visibility="Collapsed" Margin="0,8,0,12">
                       <TextBlock Text="Avatar type" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,6" />
@@ -333,15 +333,62 @@
                       <Border x:Name="CubismModelCard" Background="#0C121E" BorderBrush="#1C273C" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8" Visibility="Collapsed">
                         <StackPanel>
                           <TextBlock x:Name="CubismModelName" Text="No model selected" FontSize="11" FontWeight="SemiBold" Foreground="#F8FAFC" />
-                          <TextBlock x:Name="CubismSdkNotice" Text="Cubism Native SDK required for .moc3 · Built-in GPU avatar active" FontSize="10" Foreground="#38BDF8" TextWrapping="Wrap" Margin="0,3,0,6" />
+                          <TextBlock x:Name="CubismSdkNotice" Text="Choose a model3.json file with its textures and animations." FontSize="10" Foreground="#38BDF8" TextWrapping="Wrap" Margin="0,3,0,6" />
                           <Button Content="Choose Live2D model…" Click="ChooseCubismModelClick" Height="28" FontSize="11" />
+                          <Button Content="Load Haru sample" Click="LoadHaruClick" Height="28" FontSize="11" Margin="0,6,0,0" />
+                          <TextBlock x:Name="AvatarMotionLabel" Text="Motion" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,10,0,4" />
+                          <ComboBox x:Name="AvatarMotionChoice" Style="{StaticResource AvatarChoice}" SelectionChanged="AvatarAnimationChanged" Height="30" />
+                          <TextBlock Text="Expression" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,8,0,4" />
+                          <ComboBox x:Name="AvatarExpressionChoice" Style="{StaticResource AvatarChoice}" SelectionChanged="AvatarAnimationChanged" Height="30" />
                         </StackPanel>
                       </Border>
                       
+                      <Expander Header="Size &amp; position" IsExpanded="True" Margin="0,6,0,12">
+                        <StackPanel Margin="0,10,0,0">
+                          <UniformGrid Columns="2" Margin="0,0,0,12">
+                            <Button Content="Upper body" Click="AvatarUpperBodyClick" Height="30" Margin="0,0,3,0" />
+                            <Button Content="Face close-up" Click="AvatarFaceClick" Height="30" Margin="3,0,0,0" />
+                          </UniformGrid>
+                          <DockPanel Margin="0,0,0,4">
+                            <TextBlock x:Name="AvatarScaleLabel" Text="1.00x" DockPanel.Dock="Right" Foreground="#38BDF8" />
+                            <TextBlock Text="Size" Foreground="{StaticResource Muted}" />
+                          </DockPanel>
+                          <Slider x:Name="AvatarScale" Minimum="0.25" Maximum="6" Value="1" SmallChange="0.05" LargeChange="0.25" ValueChanged="AvatarFramingChanged" AutomationProperties.Name="Avatar size" />
+                          <DockPanel Margin="0,10,0,4">
+                            <TextBlock x:Name="AvatarXLabel" Text="0%" DockPanel.Dock="Right" Foreground="#38BDF8" />
+                            <TextBlock Text="Horizontal position" Foreground="{StaticResource Muted}" />
+                          </DockPanel>
+                          <Slider x:Name="AvatarPositionX" Minimum="-1" Maximum="1" Value="0" SmallChange="0.01" LargeChange="0.1" ValueChanged="AvatarFramingChanged" AutomationProperties.Name="Avatar horizontal position" />
+                          <DockPanel Margin="0,10,0,4">
+                            <TextBlock x:Name="AvatarYLabel" Text="0%" DockPanel.Dock="Right" Foreground="#38BDF8" />
+                            <TextBlock Text="Vertical position" Foreground="{StaticResource Muted}" />
+                          </DockPanel>
+                          <Slider x:Name="AvatarPositionY" Minimum="-1" Maximum="1" Value="0" SmallChange="0.01" LargeChange="0.1" ValueChanged="AvatarFramingChanged" AutomationProperties.Name="Avatar vertical position" />
+                          <Button Content="Reset size &amp; position" Click="AvatarResetFramingClick" Height="28" Margin="0,10,0,0" />
+                        </StackPanel>
+                      </Expander>
                       <TextBlock Text="Motion source" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,4,0,4" />
-                      <CheckBox x:Name="AvatarMotion" Content="Animate test pose" Click="AvatarChanged"
+                      <CheckBox x:Name="AvatarMotion" Content="Demo animation (no camera)" Click="AvatarChanged"
                                 IsEnabled="{Binding IsChecked, ElementName=AvatarEnabled}" Margin="0,2,0,4" />
-                      <TextBlock x:Name="MotionSourceDescription" Text="Animates head, eye and mouth motion in a continuous loop without camera input." Foreground="#93A4B8" FontSize="10" LineHeight="14" TextWrapping="Wrap" Margin="20,0,0,4" />
+                      <Button x:Name="TrackFaceButton" Content="Camera tracking" Click="TrackFaceClick" Height="32" Margin="0,8,0,4" />
+                      <TextBlock x:Name="MotionSourceDescription" Text="Demo motion. Switch to Camera tracking to follow your face." Foreground="#93A4B8" FontSize="10" LineHeight="14" TextWrapping="Wrap" Margin="0,4,0,8" />
+                      <Border Background="#111C2B" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+                        <TextBlock x:Name="AvatarTrackingStatus" Text="Choose camera tracking to begin" TextWrapping="Wrap" Foreground="#93A4B8" FontSize="10" />
+                      </Border>
+                      <Button x:Name="AvatarRecenterButton" Content="Set neutral face" Click="AvatarRecenterClick" Height="30" ToolTip="Look straight at the camera, then click to center head rotation. Blink and mouth stay live." />
+                      <DockPanel Margin="0,12,0,4">
+                        <TextBlock x:Name="AvatarSmoothingLabel" Text="60 ms" DockPanel.Dock="Right" Foreground="#38BDF8" />
+                        <TextBlock Text="Motion smoothing" Foreground="{StaticResource Muted}" />
+                      </DockPanel>
+                      <Slider x:Name="AvatarSmoothing" Minimum="0" Maximum="300" Value="60" SmallChange="10" LargeChange="30" ValueChanged="AvatarSmoothingChanged" AutomationProperties.Name="Face tracking smoothing" />
+                      <DockPanel Margin="0,12,0,4">
+                        <TextBlock x:Name="AvatarSensitivityLabel" Text="1.30x" DockPanel.Dock="Right" Foreground="#38BDF8" />
+                        <TextBlock Text="Head movement sensitivity" Foreground="{StaticResource Muted}" />
+                      </DockPanel>
+                      <Slider x:Name="AvatarSensitivity" Minimum="0.5" Maximum="2.5" Value="1.3" SmallChange="0.1" ValueChanged="AvatarTrackingOptionsChanged" AutomationProperties.Name="Head movement sensitivity" />
+                      <CheckBox x:Name="AvatarArms" Content="Track arm lift &amp; bend (Haru)" IsChecked="True" Click="AvatarTrackingOptionsChanged" Margin="0,12,0,4" />
+                      <CheckBox x:Name="AvatarMirror" Content="Mirror movement" Click="AvatarTrackingOptionsChanged" Margin="0,6,0,4" />
+                      <TextBlock Text="Keep shoulders, elbows and wrists in frame. Hidden arms return to rest. Haru has a limited 2D arm rig; fingers are not tracked." FontSize="10" TextWrapping="Wrap" Foreground="{StaticResource Muted}" Margin="0,8,0,4" />
                     </StackPanel>
                     <TextBlock Text="Background removal" Style="{StaticResource SectionTitle}" />
                     

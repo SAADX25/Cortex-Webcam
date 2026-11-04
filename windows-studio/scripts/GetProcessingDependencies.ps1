@@ -17,10 +17,18 @@ Expand-Archive -LiteralPath $ort -DestinationPath (Join-Path $root 'runtime') -F
 Expand-Archive -LiteralPath $dml -DestinationPath (Join-Path $root 'directml') -Force
 Write-Output "Dependencies ready. Configure CMake with ONNXRUNTIME_ROOT=$root/runtime and DIRECTML_ROOT=$root/directml. Model: $model"
 
+if (!$CubismSdkRoot) {
+    $localSdk = Join-Path $PSScriptRoot '..\.deps\cubism-sdk'
+    if (Test-Path -LiteralPath $localSdk) { $CubismSdkRoot = $localSdk }
+}
 if ($CubismSdkRoot) {
     $sdk = (Resolve-Path -LiteralPath $CubismSdkRoot).Path
     foreach ($required in 'Core/include/Live2DCubismCore.h','Framework/CMakeLists.txt','Framework/src/Rendering/D3D11/Shaders') {
         if (!(Test-Path -LiteralPath (Join-Path $sdk $required))) { throw "Incomplete Cubism SDK: missing $required" }
     }
-    Write-Output "Cubism SDK located. Configure with -DCUBISM_SDK_ROOT=`"$sdk`" and the DirectXTK package toolchain."
+    Write-Output "Cubism SDK located. Configure with -DCUBISM_SDK_ROOT=`"$sdk`"."
 }
+
+& (Join-Path $PSScriptRoot "GetFaceTrackingModels.ps1")
+
+& (Join-Path $PSScriptRoot "GetBodyTrackingModels.ps1")

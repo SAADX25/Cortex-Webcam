@@ -3,6 +3,8 @@
 #include "GpuHelpers.h"
 #include <wincodec.h>
 #include <cmath>
+#include <sstream>
+#include <iomanip>
 namespace cortex {
 struct VideoProcessor::Impl {
     struct Source {
@@ -30,7 +32,10 @@ struct VideoProcessor::Impl {
     std::unique_ptr<AvatarFilter> avatar;
     std::unique_ptr<AvatarModel> avatarModel;
     std::unique_ptr<FaceTracker> tracker;
-    std::chrono::steady_clock::time_point avatarStart;
+    std::chrono::steady_clock::time_point avatarStart, poseTime;
+    AvatarPose smoothedPose, neutralPose;
+    uint64_t calibration{};
+    std::string trackingStatus{"Open Cortex Sender to track your face"};
     void draw(const GpuImage& image, ID3D11ShaderResourceView* mask, NormalizedRect rect,
               bool isBackground) {
         const float availableW = target.width * rect.width,
@@ -168,12 +173,26 @@ void VideoProcessor::setOutputSize(uint32_t width, uint32_t height) {
 const FilterSettings& VideoProcessor::settings() const {
     return impl_->settings;
 }
+std::string VideoProcessor::avatarTrackingStatus() const {
+    return impl_->trackingStatus;
+}
 void VideoProcessor::setSettings(const FilterSettings& settings) {
+    if (!std::isfinite(settings.avatarSensitivity) || settings.avatarSensitivity < .5f ||
+        settings.avatarSensitivity > 2.5f)
+        throw std::invalid_argument("Invalid head movement sensitivity");
+    if (!std::isfinite(settings.avatarSmoothing) || settings.avatarSmoothing < 0 ||
+        settings.avatarSmoothing > .3f)
+        throw std::invalid_argument("Invalid avatar smoothing");
     if (!std::isfinite(settings.similarity) || !std::isfinite(settings.softness) ||
         !std::isfinite(settings.spill) || settings.similarity < 0 || settings.similarity > 1 ||
         settings.softness < 0.001f || settings.softness > 1 || settings.spill < 0 ||
         settings.spill > 1)
         throw std::invalid_argument("Invalid chroma key controls");
+    const auto& framing = settings.avatarFraming;
+    if (!std::isfinite(framing.scale) || !std::isfinite(framing.x) || !std::isfinite(framing.y) ||
+        framing.scale < .25f || framing.scale > 6 || std::abs(framing.x) > 1 ||
+        std::abs(framing.y) > 1)
+        throw std::invalid_argument("Invalid avatar size or position");
     if (settings.removal != impl_->settings.removal)
         for (auto& [id, source] : impl_->sources) {
             source->previous.reset();
@@ -251,19 +270,67 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     // bridge.
     AvatarPose pose;
     if (s.settings.avatarEnabled) {
-        if (!s.avatarModel && !s.avatar)
+        if (!s.avatar)
             s.avatar = std::make_unique<AvatarFilter>(s.gpu);
         if (s.settings.avatarTestMotion) {
             const auto elapsed = std::chrono::steady_clock::now() - s.avatarStart;
             pose = AvatarFilter::testPose(std::chrono::duration<double>(elapsed).count());
-        } else if (!scene.layers.empty() && scene.layers.front().frame) {
-            if (!s.tracker)
-                s.tracker = makeFaceTracker(s.gpu);
-            if (s.tracker) {
-                auto landmarks = s.tracker->track(*scene.layers.front().frame);
-                if (landmarks)
-                    pose = AvatarFilter::map(*landmarks).value_or(AvatarPose{});
+        } else {
+            const auto now = std::chrono::steady_clock::now();
+            AvatarPose targetPose;
+            targetPose.cameraDriven = true;
+            targetPose.armsEnabled = s.settings.avatarArms;
+            s.trackingStatus = "Waiting for phone camera - open Cortex Sender";
+            if (!scene.layers.empty() && scene.layers.front().frame &&
+                now - scene.layers.front().frame->readyAt < std::chrono::milliseconds(500)) {
+                if (!s.tracker)
+                    s.tracker = makeFaceTracker(s.gpu);
+                s.tracker->setBodyTracking(s.settings.avatarArms);
+                if (auto landmarks = s.tracker->track(*scene.layers.front().frame)) {
+                    if (auto measured = AvatarFilter::map(*landmarks)) {
+                        if (s.calibration != s.settings.avatarCalibration) {
+                            s.neutralPose = *measured;
+                            s.calibration = s.settings.avatarCalibration;
+                        }
+                        targetPose = *measured;
+                        targetPose.yaw = std::clamp((targetPose.yaw - s.neutralPose.yaw) *
+                                                        s.settings.avatarSensitivity,
+                                                    -45.f, 45.f);
+                        targetPose.pitch = std::clamp((targetPose.pitch - s.neutralPose.pitch) *
+                                                          s.settings.avatarSensitivity,
+                                                      -35.f, 35.f);
+                        targetPose.roll = std::clamp((targetPose.roll - s.neutralPose.roll) *
+                                                         s.settings.avatarSensitivity,
+                                                     -45.f, 45.f);
+                    }
+                }
+                targetPose.armsEnabled = s.settings.avatarArms;
+                if (s.settings.avatarArms)
+                    targetPose.arms = s.tracker->upperBody().value_or(UpperBodyPose{});
+                if (s.settings.avatarMirror) {
+                    targetPose.yaw = -targetPose.yaw;
+                    targetPose.roll = -targetPose.roll;
+                    std::swap(targetPose.arms.left, targetPose.arms.right);
+                }
+                s.trackingStatus = s.tracker->status();
             }
+            const float dt =
+                s.poseTime.time_since_epoch().count() == 0
+                    ? 1.f / 30
+                    : std::clamp(std::chrono::duration<float>(now - s.poseTime).count(), 0.f, .1f);
+            s.poseTime = now;
+            // Faster eyelids preserve natural blinks while head motion stays smooth.
+            pose = smoothAvatarPose(s.smoothedPose, targetPose, dt, s.settings.avatarSmoothing);
+            const auto fast = smoothAvatarPose(s.smoothedPose, targetPose, dt,
+                                               std::min(.025f, s.settings.avatarSmoothing));
+            pose.eyeOpen = fast.eyeOpen;
+            pose.leftEyeOpen = fast.leftEyeOpen;
+            pose.rightEyeOpen = fast.rightEyeOpen;
+            s.smoothedPose = pose;
+            std::ostringstream values;
+            values << " | Head " << std::fixed << std::setprecision(0) << pose.yaw << " / "
+                   << pose.pitch << " / " << pose.roll;
+            s.trackingStatus += values.str();
         }
     }
     if (!s.settings.avatarEnabled)
@@ -314,10 +381,12 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     if (background.view && !s.settings.transparent)
         s.draw(background, nullptr, {}, true);
     if (s.settings.avatarEnabled) {
-        if (s.settings.avatarMode == 1 && s.avatarModel)
+        if (s.settings.avatarMode == 1 && s.avatarModel) {
+            s.avatarModel->setAnimation(s.settings.avatarMotion, s.settings.avatarExpression);
+            s.avatarModel->setFraming(s.settings.avatarFraming);
             s.avatarModel->draw(context, pose, s.target.width, s.target.height);
-        else
-            s.avatar->draw(pose, s.target.width, s.target.height);
+        } else
+            s.avatar->draw(pose, s.target.width, s.target.height, s.settings.avatarFraming);
     } else if (s.settings.removal != RemovalMode::BackgroundOnly)
         for (const auto& layer : scene.layers)
             if (layer.frame) {
@@ -334,6 +403,13 @@ GpuImage VideoProcessor::exportFrame(bool preserveAlpha, bool bottomUp) {
     auto* target = s.exportView.Get();
     context->OMSetRenderTargets(1, &target, nullptr);
     context->OMSetBlendState(nullptr, nullptr, 0xffffffff);
+    context->OMSetDepthStencilState(nullptr, 0);
+    context->RSSetState(s.rasterizer.Get());
+    context->IASetInputLayout(nullptr);
+    context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    context->VSSetShader(s.vertex.Get(), nullptr, 0);
+    auto* sampler = s.sampler.Get();
+    context->PSSetSamplers(0, 1, &sampler);
     D3D11_VIEWPORT viewport{
         0, 0, static_cast<float>(s.target.width), static_cast<float>(s.target.height), 0, 1};
     context->RSSetViewports(1, &viewport);

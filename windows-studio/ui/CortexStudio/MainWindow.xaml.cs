@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -8,6 +8,8 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -63,6 +65,7 @@ public partial class MainWindow : Window
     private int _displayMode = -1, _displayFps = -1;
     private int _avatarMode = 0;
     private string _avatarModelPath = "";
+    private bool _loadingAvatarChoices;
 
     private NativeState _state;
 
@@ -326,6 +329,20 @@ public partial class MainWindow : Window
 
         Fps30Button.IsEnabled = Fps60Button.IsEnabled = _state.PhoneSyncAvailable != 0 || string.IsNullOrWhiteSpace(_state.Peer);
 
+        if (AvatarEnabled.IsChecked == true)
+        {
+            var separator = _state.Status.IndexOf(" | ", StringComparison.Ordinal);
+            AvatarTrackingStatus.Text = AvatarMotion.IsChecked == true
+                ? "Demo animation - camera tracking is off"
+                : separator >= 0 ? _state.Status[(separator + 3)..] : "Waiting for phone camera - open Cortex Sender";
+        }
+        if (_avatarMode == 1 && !string.IsNullOrEmpty(_avatarModelPath))
+        {
+            if (_state.Status.StartsWith("Live2D Avatar", StringComparison.Ordinal))
+                CubismSdkNotice.Text = "Model active · textures, motions and physics loaded.";
+            else if (!string.IsNullOrWhiteSpace(_state.Error))
+                CubismSdkNotice.Text = "Model could not be loaded. See the error above the preview.";
+        }
         if (!string.IsNullOrWhiteSpace(_state.Error)) { ShowError(FriendlyError(_state.Error)); _nativeErrorShown = true; }
 
         else if (_nativeErrorShown) { _nativeErrorShown = false; ErrorBanner.Visibility = Visibility.Collapsed; }
@@ -447,10 +464,50 @@ public partial class MainWindow : Window
         if (MotionSourceDescription is not null)
             MotionSourceDescription.Text = AvatarMotion.IsChecked == true
                 ? "Animates head, eye and mouth motion in a continuous loop without camera input."
-                : "Real-time camera face tracking drives head angle and facial features.";
+                : "Live head and arm tracking. Move into frame, then set neutral face while looking straight ahead.";
+        if (TrackFaceButton is not null)
+            TrackFaceButton.Style = (Style)FindResource(AvatarMotion.IsChecked == true ? "ButtonBase" : "Selected");
+        if (AvatarRecenterButton is not null)
+            AvatarRecenterButton.IsEnabled = enabled && AvatarMotion.IsChecked != true;
+        if (AvatarMotionChoice is not null)
+        {
+            AvatarMotionChoice.IsEnabled = AvatarMotion.IsChecked == true;
+            AvatarMotionChoice.Visibility = AvatarMotion.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        }
+        if (AvatarMotionLabel is not null)
+            AvatarMotionLabel.Text = AvatarMotion.IsChecked == true ? "Motion" : "Camera controls the model · idle off";
         PreviewHost.Set(21, _avatarMode);
         PreviewHost.Set(20, AvatarMotion.IsChecked == true ? 1 : 0);
         PreviewHost.Set(19, enabled ? 1 : 0);
+    }
+
+    private void TrackFaceClick(object sender, RoutedEventArgs e)
+    {
+        AvatarEnabled.IsChecked = true;
+        AvatarMotion.IsChecked = false;
+        AvatarChanged(sender, e);
+    }
+
+    private void AvatarRecenterClick(object sender, RoutedEventArgs e)
+    {
+        PreviewHost.Set(28, 1);
+        AvatarTrackingStatus.Text = "Look straight at the camera - centering on the next detected face.";
+    }
+
+    private void AvatarSmoothingChanged(object sender, RoutedEventArgs e)
+    {
+        if (AvatarSmoothing is null || AvatarSmoothingLabel is null || PreviewHost is null) return;
+        AvatarSmoothingLabel.Text = $"{AvatarSmoothing.Value:0} ms";
+        PreviewHost.Set(27, AvatarSmoothing.Value / 1000);
+    }
+
+    private void AvatarTrackingOptionsChanged(object sender, RoutedEventArgs e)
+    {
+        if (AvatarSensitivity is null || AvatarSensitivityLabel is null || AvatarArms is null || AvatarMirror is null || PreviewHost is null) return;
+        AvatarSensitivityLabel.Text = $"{AvatarSensitivity.Value:0.00}x";
+        PreviewHost.Set(29, AvatarSensitivity.Value);
+        PreviewHost.Set(30, AvatarArms.IsChecked == true ? 1 : 0);
+        PreviewHost.Set(31, AvatarMirror.IsChecked == true ? 1 : 0);
     }
 
     private void AvatarTestClick(object sender, RoutedEventArgs e)
@@ -476,16 +533,98 @@ public partial class MainWindow : Window
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
             Title = "Choose Live2D Cubism model",
-            Filter = "Live2D Model|*.moc3;*.model3.json|All files|*.*",
+            Filter = "Live2D model settings|*.model3.json|Live2D model data|*.moc3",
             CheckFileExists = true
         };
-        if (dialog.ShowDialog(this) != true) return;
-        _avatarModelPath = dialog.FileName;
-        CubismModelName.Text = System.IO.Path.GetFileName(_avatarModelPath);
-        CubismModelName.ToolTip = _avatarModelPath;
-        PreviewHost.SetPath(4, _avatarModelPath);
-        _avatarMode = 1;
-        AvatarCubismClick(sender, e);
+        if (dialog.ShowDialog(this) == true)
+            LoadAvatar(dialog.FileName);
+    }
+
+    private void LoadHaruClick(object sender, RoutedEventArgs e)
+    {
+        var model = Path.Combine(AppContext.BaseDirectory, "assets", "avatars", "Haru", "Haru.model3.json");
+        if (!File.Exists(model))
+        {
+            CubismSdkNotice.Text = "The Haru sample is missing. Choose a model folder manually.";
+            return;
+        }
+        LoadAvatar(model);
+        AvatarEnabled.IsChecked = true;
+        AvatarMotion.IsChecked = false;
+        AvatarChanged(sender, e);
+    }
+
+    private void LoadAvatar(string filename)
+    {
+        try
+        {
+            if (Path.GetExtension(filename).Equals(".moc3", StringComparison.OrdinalIgnoreCase))
+                filename = Path.ChangeExtension(filename, ".model3.json");
+            if (new FileInfo(filename).Length > 4 * 1024 * 1024)
+                throw new InvalidDataException("Model settings file is too large.");
+            using var document = JsonDocument.Parse(File.ReadAllText(filename));
+            var references = document.RootElement.GetProperty("FileReferences");
+            var motions = new List<string> { "Automatic idle" };
+            var expressions = new List<string> { "Default expression" };
+            if (references.TryGetProperty("Motions", out var groups))
+                foreach (var group in groups.EnumerateObject())
+                    foreach (var item in group.Value.EnumerateArray())
+                        motions.Add(group.Name + " / " + Path.GetFileNameWithoutExtension(item.GetProperty("File").GetString()));
+            if (references.TryGetProperty("Expressions", out var entries))
+                foreach (var item in entries.EnumerateArray())
+                    expressions.Add(item.GetProperty("Name").GetString() ?? "Expression");
+            _loadingAvatarChoices = true;
+            try
+            {
+                AvatarMotionChoice.ItemsSource = motions;
+                AvatarExpressionChoice.ItemsSource = expressions;
+                AvatarMotionChoice.SelectedIndex = AvatarExpressionChoice.SelectedIndex = 0;
+            }
+            finally { _loadingAvatarChoices = false; }
+            _avatarModelPath = filename;
+            CubismModelName.Text = Path.GetFileName(filename);
+            CubismModelName.ToolTip = filename;
+            CubismSdkNotice.Text = "Loading model. Any asset or renderer error appears above the preview.";
+            PreviewHost.Set(22, -1);
+            PreviewHost.Set(23, -1);
+            PreviewHost.SetPath(4, filename);
+            AvatarCubismClick(this, new RoutedEventArgs());
+        }
+        catch (Exception error) when (error is IOException or JsonException or KeyNotFoundException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            CubismSdkNotice.Text = "Could not read model settings. " + error.Message;
+        }
+    }
+
+    private void AvatarFramingChanged(object sender, RoutedEventArgs e)
+    {
+        if (AvatarScale is null || AvatarPositionX is null || AvatarPositionY is null ||
+            AvatarScaleLabel is null || AvatarXLabel is null || AvatarYLabel is null ||
+            PreviewHost is null) return;
+        AvatarScaleLabel.Text = $"{AvatarScale.Value:0.00}x";
+        AvatarXLabel.Text = $"{AvatarPositionX.Value * 100:0}%";
+        AvatarYLabel.Text = $"{AvatarPositionY.Value * 100:0}%";
+        PreviewHost.Set(24, AvatarScale.Value);
+        PreviewHost.Set(25, AvatarPositionX.Value);
+        PreviewHost.Set(26, AvatarPositionY.Value);
+    }
+
+    private void SetAvatarFraming(double scale, double x, double y)
+    {
+        AvatarScale.Value = scale;
+        AvatarPositionX.Value = x;
+        AvatarPositionY.Value = y;
+    }
+
+    private void AvatarUpperBodyClick(object sender, RoutedEventArgs e) => SetAvatarFraming(1.8, 0, 0);
+    private void AvatarFaceClick(object sender, RoutedEventArgs e) => SetAvatarFraming(3.2, 0, -0.05);
+    private void AvatarResetFramingClick(object sender, RoutedEventArgs e) => SetAvatarFraming(1, 0, 0);
+
+    private void AvatarAnimationChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingAvatarChoices || !_initialized) return;
+        PreviewHost.Set(22, AvatarMotionChoice.SelectedIndex - 1);
+        PreviewHost.Set(23, AvatarExpressionChoice.SelectedIndex - 1);
     }
 
     private void OriginalClick(object sender, RoutedEventArgs e)

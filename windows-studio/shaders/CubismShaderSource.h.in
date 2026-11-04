@@ -1,0 +1,5 @@
+#pragma once
+namespace cortex::detail {
+inline constexpr char cubismEffect[] = R"CSMEFFECT(@CORTEX_CUBISM_EFFECT@)CSMEFFECT";
+inline constexpr char cubismBlend[] = R"CSMBLEND(@CORTEX_CUBISM_BLEND@)CSMBLEND";
+}

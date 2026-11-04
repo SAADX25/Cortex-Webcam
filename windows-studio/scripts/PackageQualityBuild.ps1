@@ -23,7 +23,37 @@ if($Desktop){
 }else{
     Copy-Item -LiteralPath (Join-Path $release 'cortex-receive.exe') -Destination (Join-Path $package 'CortexStudio.exe')
 }
+$faceModels = Join-Path $studio '.deps\face-tracking'
+foreach ($name in @('mnv3_detection_opt.onnx','lm_model1_opt.onnx','LICENSE','SOURCE.json')) {
+    if (!(Test-Path -LiteralPath (Join-Path $faceModels $name))) { throw "Missing face tracking asset: $name. Run scripts/GetFaceTrackingModels.ps1." }
+}
+Copy-Item -LiteralPath $faceModels -Destination (Join-Path $package 'models') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $faceModels 'LICENSE') -Destination (Join-Path $package 'licenses\OpenSeeFace-BSD-2-Clause.txt') -Force
+$bodyModels = Join-Path $studio '.deps\upper-body'
+foreach ($name in @('person_detection_mediapipe_2023mar.onnx','pose_estimation_mediapipe_2023mar.onnx','LICENSE','SOURCE.json')) {
+    if (!(Test-Path -LiteralPath (Join-Path $bodyModels $name))) { throw "Missing upper-body asset: $name. Run scripts/GetBodyTrackingModels.ps1." }
+}
+Copy-Item -LiteralPath $bodyModels -Destination (Join-Path $package 'models') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $bodyModels 'LICENSE') -Destination (Join-Path $package 'licenses\MediaPipePose-Apache-2.0.txt') -Force
+Copy-Item -LiteralPath (Join-Path $studio 'docs\AvatarCamera.md') -Destination (Join-Path $package 'Avatar-Camera.md') -Force
+$avatarAssets = Join-Path $workspace 'assets\avatars'
+if (Test-Path -LiteralPath $avatarAssets -PathType Container) {
+    Copy-Item -LiteralPath $avatarAssets -Destination (Join-Path $package 'assets') -Recurse -Force
+}
+if (!$CubismSdkRoot) {
+    $candidateSdk = Join-Path $studio '.deps\cubism-sdk'
+    if (Test-Path -LiteralPath (Join-Path $candidateSdk 'Core/include/Live2DCubismCore.h')) {
+        $CubismSdkRoot = $candidateSdk
+    }
+}
 if ($CubismSdkRoot) {
+    foreach ($license in @('LICENSE.md', 'Core/LICENSE.md', 'Framework/LICENSE.md')) {
+        $licensePath = Join-Path $CubismSdkRoot $license
+        if (Test-Path -LiteralPath $licensePath) {
+            $licenseName = 'Cubism-' + ($license -replace '[/\\]', '-')
+            Copy-Item -LiteralPath $licensePath -Destination (Join-Path $package "licenses\$licenseName") -Force
+        }
+    }
     $shaderSource = Join-Path $CubismSdkRoot 'Framework/src/Rendering/D3D11/Shaders'
     if (!(Test-Path -LiteralPath $shaderSource -PathType Container)) { throw "Missing Cubism D3D11 shaders: $shaderSource" }
     $shaderTarget = New-Item -ItemType Directory -Path (Join-Path $package 'FrameworkShaders') -Force

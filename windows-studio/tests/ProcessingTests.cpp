@@ -111,14 +111,23 @@ int main(int argc, char** argv) {
         auto green = nv12(gpu, 173, 42, 26), red = nv12(gpu, 63, 102, 240),
              blue = nv12(gpu, 32, 240, 118);
         {
-            auto tracker = makeFaceTracker(gpu);
-            auto landmarks = tracker->track(*red);
-            check(landmarks.has_value(), "Face tracker must detect landmarks from NV12 frame");
-            auto pose = AvatarFilter::map(*landmarks);
-            check(pose.has_value(), "Landmarks must map to valid avatar pose");
-            check(std::isfinite(pose->yaw) && std::isfinite(pose->pitch) &&
-                      std::isfinite(pose->roll),
-                  "Avatar pose angles must be finite");
+            auto tracker = makeFaceTracker(gpu, std::filesystem::path(L"missing-face-models"));
+            check(!tracker->track(*red), "A solid color must never fabricate facial landmarks");
+            FaceLandmarks landmarks{{10, 10}, {30, 10}, {20, 21}, {20, 26}, {20, 26}};
+            auto neutral = AvatarFilter::map(landmarks);
+            check(neutral && neutral->mouth == 0 && std::abs(neutral->yaw) < .01f, "Closed mouth and centered face");
+            landmarks.lowerLip.y += 5;
+            landmarks.leftEyeOpen = 0; landmarks.rightEyeOpen = 1;
+            auto opened = AvatarFilter::map(landmarks);
+            check(opened && opened->mouth > .9f && opened->leftEyeOpen == 0 && opened->rightEyeOpen == 1,
+                  "Real mouth aperture and independent blink survive mapping");
+            AvatarPose target; target.yaw = 30;
+            auto half = smoothAvatarPose({}, target, .05f, .1f);
+            auto composed = smoothAvatarPose(half, target, .05f, .1f);
+            auto whole = smoothAvatarPose({}, target, .1f, .1f);
+            check(std::abs(whole.yaw - composed.yaw) < .001f && half.yaw > 0 && half.yaw < 30,
+                  "Smoothing must be independent of frame rate");
+            check(smoothAvatarPose({}, target, 0, 0).yaw == 30, "Zero smoothing must respond immediately");
         }
         settings.avatarEnabled = true;
         processor.setSettings(settings);
@@ -127,6 +136,17 @@ int main(int argc, char** argv) {
         check(avatar[3] == 0 && avatar[center + 3] == 255 && avatar[center + 1] > 0,
               "Avatar replaces camera with transparent surround");
         check(read(gpu, processor.exportFrame(true))[center + 3] == 255, "Avatar reaches export");
+        settings.avatarFraming = {1, .3f, 0};
+        processor.setSettings(settings);
+        const auto shiftedAvatar = read(gpu, processor.render(scene(red)));
+        check(shiftedAvatar[center + 3] < 10,
+              "Moving GPU avatar must move its actual opacity mask");
+        settings.avatarFraming.scale = 0;
+        bool rejectedFraming = false;
+        try { processor.setSettings(settings); }
+        catch (const std::invalid_argument&) { rejectedFraming = true; }
+        check(rejectedFraming, "Zero avatar scale must be rejected");
+        settings.avatarFraming = {};
         settings.avatarEnabled = false;
         processor.setSettings(settings);
         auto keyed = read(gpu, processor.render(scene(green)));

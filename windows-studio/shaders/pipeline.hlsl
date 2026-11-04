@@ -89,3 +89,5 @@ RWStructuredBuffer<float> Tensor : register(u0);
     Tensor[512 * 288 + index] = rgb.g;
     Tensor[2 * 512 * 288 + index] = rgb.b;
 }
+
+float4 TrackingDownsample(Vertex input) : SV_TARGET { return Source.Sample(LinearClamp, input.uv); }

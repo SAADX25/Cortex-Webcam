@@ -1,4 +1,4 @@
-﻿#include "cortex/ui/StudioBridge.h"
+#include "cortex/ui/StudioBridge.h"
 #include "cortex/transport/UdpH264Source.h"
 #include "cortex/discovery/StudioDiscovery.h"
 #include "cortex/filters/VideoProcessor.h"
@@ -147,7 +147,12 @@ float4 PS(V v):SV_TARGET {float4 c=Frame.Sample(Clamp,v.uv);uint2 p=uint2(v.p.xy
 };
 struct Controls {
     bool avatarEnabled{}, avatarTestMotion{};
-    int avatarMode = 0;
+    int avatarMode = 0, avatarMotion = -1, avatarExpression = -1;
+    uint64_t avatarRevision{};
+    AvatarFraming avatarFraming;
+    float avatarSmoothing{.06f}, avatarSensitivity{1.3f};
+    bool avatarArms{true}, avatarMirror{};
+    uint64_t avatarCalibration{};
     std::filesystem::path avatarModelPath;
     bool output = false;
     int fps = 30, mode = 0, backgroundKind = 0, videoPort = 5004, controlPort = 5005;
@@ -213,6 +218,7 @@ class Engine {
                 text(state.status, L"Waiting for your phone");
             }
 
+            bool avatarLoaded = false;
             for (;;) {
                 Controls current;
                 {
@@ -233,20 +239,26 @@ class Engine {
                         output = std::make_unique<UnityCameraOutput>(gpu);
                     if (!current.output)
                         output.reset();
-                    if (current.avatarModelPath != applied.avatarModelPath) {
+                    if (current.avatarModelPath != applied.avatarModelPath ||
+                        current.avatarRevision != applied.avatarRevision) {
                         if (!current.avatarModelPath.empty()) {
                             try {
                                 auto m = loadAvatarModel(gpu, current.avatarModelPath);
-                                if (m)
-                                    processor.setAvatarModel(std::move(m));
-                                else
-                                    failure("Live2D Cubism SDK is not available in this build. "
-                                            "Using built-in GPU test avatar.");
+                                processor.setAvatarModel(std::move(m));
+                                avatarLoaded = true;
+                                {
+                                    std::lock_guard lock(mutex);
+                                    state.error[0] = 0;
+                                }
                             } catch (const std::exception& error) {
+                                processor.setAvatarModel(nullptr);
+                                avatarLoaded = false;
                                 failure(error.what());
                             }
-                        } else
+                        } else {
                             processor.setAvatarModel(nullptr);
+                            avatarLoaded = false;
+                        }
                     }
                     if (current.model != applied.model && !current.model.empty()) {
                         try {
@@ -272,6 +284,14 @@ class Engine {
                     filter.avatarEnabled = current.avatarEnabled;
                     filter.avatarTestMotion = current.avatarTestMotion;
                     filter.avatarMode = current.avatarMode;
+                    filter.avatarMotion = current.avatarMotion;
+                    filter.avatarExpression = current.avatarExpression;
+                    filter.avatarFraming = current.avatarFraming;
+                    filter.avatarSmoothing = current.avatarSmoothing;
+                    filter.avatarSensitivity = current.avatarSensitivity;
+                    filter.avatarArms = current.avatarArms;
+                    filter.avatarMirror = current.avatarMirror;
+                    filter.avatarCalibration = current.avatarCalibration;
                     filter.backgroundZoom = current.backgroundZoom;
                     filter.backgroundX = current.backgroundX;
                     filter.backgroundY = current.backgroundY;
@@ -451,7 +471,7 @@ class Engine {
                     text(state.diagnostics, wide(source.detail));
                     const wchar_t* st =
                         current.avatarEnabled
-                            ? (current.avatarMode == 1
+                            ? (current.avatarMode == 1 && avatarLoaded
                                    ? (current.avatarTestMotion ? L"Live2D Avatar - Test motion"
                                                                : L"Live2D Avatar - Camera tracking")
                                    : (current.avatarTestMotion
@@ -470,7 +490,10 @@ class Engine {
                                                  ? L"Receiving video - waiting for a complete frame"
                                                  : L"Ready - add background media or open Cortex "
                                                    L"Sender")));
-                    text(state.status, st);
+                    text(state.status,
+                         current.avatarEnabled && !current.avatarTestMotion
+                             ? std::wstring(st) + L" | " + wide(processor.avatarTrackingStatus())
+                             : std::wstring(st));
                 }
                 std::unique_lock lock(mutex);
                 wake.wait_until(lock, tick + std::chrono::nanoseconds(1'000'000'000 / current.fps),
@@ -582,6 +605,36 @@ public:
         case CortexAvatarMode:
             controls.avatarMode = std::clamp(static_cast<int>(value), 0, 1);
             break;
+        case CortexAvatarMotion:
+            controls.avatarMotion = std::clamp(static_cast<int>(value), -1, 1023);
+            break;
+        case CortexAvatarExpression:
+            controls.avatarExpression = std::clamp(static_cast<int>(value), -1, 255);
+            break;
+        case CortexAvatarScale:
+            controls.avatarFraming.scale = std::clamp(static_cast<float>(value), .25f, 6.f);
+            break;
+        case CortexAvatarPositionX:
+            controls.avatarFraming.x = std::clamp(static_cast<float>(value), -1.f, 1.f);
+            break;
+        case CortexAvatarPositionY:
+            controls.avatarFraming.y = std::clamp(static_cast<float>(value), -1.f, 1.f);
+            break;
+        case CortexAvatarSmoothing:
+            controls.avatarSmoothing = std::clamp(static_cast<float>(value), 0.f, .3f);
+            break;
+        case CortexAvatarRecenter:
+            ++controls.avatarCalibration;
+            break;
+        case CortexAvatarSensitivity:
+            controls.avatarSensitivity = std::clamp(static_cast<float>(value), .5f, 2.5f);
+            break;
+        case CortexAvatarArms:
+            controls.avatarArms = value != 0;
+            break;
+        case CortexAvatarMirror:
+            controls.avatarMirror = value != 0;
+            break;
         case 18:
             controls.backgroundFit = value != 0;
             break;
@@ -606,9 +659,10 @@ public:
         std::lock_guard lock(mutex);
         if (kind == 3)
             controls.model = path ? path : L"";
-        else if (kind == 4)
+        else if (kind == 4) {
             controls.avatarModelPath = path ? path : L"";
-        else {
+            ++controls.avatarRevision;
+        } else {
             controls.background = path ? path : L"";
             controls.backgroundKind = controls.background.empty() ? 0 : kind;
         }

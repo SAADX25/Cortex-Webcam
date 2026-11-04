@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/opencv/opencv_zoo",
+  "commit": "48b10fa505aeb51fbd127fc60a5c660040e823b7",
+  "files": [
+    {
+      "file": "person_detection_mediapipe_2023mar.onnx",
+      "sha256": "47fd5599d6fa17608f03e0eb0ae230baa6e597d7e8a2c8199fe00abea55a701f",
+      "bytes": 11990159,
+      "source": "models/person_detection_mediapipe/person_detection_mediapipe_2023mar.onnx"
+    },
+    {
+      "file": "pose_estimation_mediapipe_2023mar.onnx",
+      "sha256": "9d89c599319a18fb7d2e28451a883476164543182bafca5f09eb2cf767ed2f3f",
+      "bytes": 5557238,
+      "source": "models/pose_estimation_mediapipe/pose_estimation_mediapipe_2023mar.onnx"
+    }
+  ]
+}

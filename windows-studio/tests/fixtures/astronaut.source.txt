@@ -1,0 +1,4 @@
+NASA public-domain portrait of Eileen Collins.
+Test fixture distributed by scikit-image:
+https://raw.githubusercontent.com/scikit-image/scikit-image/v0.21.0/skimage/data/astronaut.png
+SHA256 88431cd9653ccd539741b555fb0a46b61558b301d4110412b5bc28b5e3ea6cb5

@@ -29,11 +29,40 @@ internal static class Program
             avatar.IsChecked = true;
             Check(motion.IsEnabled, "Test motion must become available with avatar mode");
             avatar.IsChecked = false;
+            Check(window.FindName("TrackFaceButton") is Button && window.FindName("AvatarTrackingStatus") is TextBlock,
+                  "Camera tracking entry and live status must be visible");
+            Check(((Slider)window.FindName("AvatarSmoothing")).Value == 60,
+                  "Face tracking smoothing must default to 60ms");
+            typeof(MainWindow).GetMethod("TrackFaceClick", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            Check(avatar.IsChecked == true && motion.IsChecked != true && ((Button)window.FindName("AvatarRecenterButton")).IsEnabled,
+                  "Camera tracking must enable avatar, disable demo and allow calibration");
+            avatar.IsChecked = false;
+            Check(((Slider)window.FindName("AvatarSensitivity")).Value == 1.3 &&
+                  ((CheckBox)window.FindName("AvatarArms")).IsChecked == true,
+                  "Live head sensitivity and arm tracking defaults must be present");
+            Check(!((ComboBox)window.FindName("AvatarMotionChoice")).IsEnabled,
+                  "Camera tracking must not enable prerecorded motion selection");
             var testBtn = (Button)window.FindName("AvatarTestBtn");
             var cubismBtn = (Button)window.FindName("AvatarCubismBtn");
             var modelCard = (FrameworkElement)window.FindName("CubismModelCard");
             var detailsPanel = (FrameworkElement)window.FindName("AvatarDetailsPanel");
             Check(testBtn is not null && cubismBtn is not null && modelCard is not null, "Avatar model controls must be present");
+            Check(window.FindName("AvatarMotionChoice") is ComboBox &&
+                  window.FindName("AvatarExpressionChoice") is ComboBox,
+                  "Model motion and expression selectors are missing");
+            var scale = (Slider)window.FindName("AvatarScale");
+            var positionX = (Slider)window.FindName("AvatarPositionX");
+            var positionY = (Slider)window.FindName("AvatarPositionY");
+            Check(scale.Value == 1 && positionX.Value == 0 && positionY.Value == 0,
+                  "Avatar framing must start at full body and center");
+            typeof(MainWindow).GetMethod("AvatarFaceClick", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            Check(scale.Value > 3 && positionY.Value < 0, "Face preset must zoom toward the head");
+            typeof(MainWindow).GetMethod("AvatarResetFramingClick", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(window, new object[] { window, new RoutedEventArgs() });
+            Check(scale.Value == 1 && positionX.Value == 0 && positionY.Value == 0,
+                  "Reset must restore size and position");
             var root = (FrameworkElement)window.Content;
             var workspace = (Grid)window.FindName("WorkspaceGrid");
             var inspector = (FrameworkElement)window.FindName("InspectorPanel");

@@ -41,7 +41,7 @@ if(CORTEX_BUILD_RECEIVER)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS shaders/pipeline.hlsl)
     configure_file(shaders/ShaderSource.h.in generated/ShaderSource.generated.h @ONLY)
     add_library(cortex_processing
-        src/filters/AvatarFilter.cpp src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
+        src/filters/AvatarFilter.cpp src/filters/FaceTracker.cpp src/filters/HeadPose.cpp src/filters/BodyTracker.cpp src/filters/CubismAvatar.cpp src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
         src/filters/RvmMatting.cpp src/filters/BackgroundVideo.cpp src/output/UnityCameraOutput.cpp)
     target_include_directories(cortex_processing PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" third_party/unitycapture)
     target_include_directories(cortex_processing SYSTEM PRIVATE "${FFMPEG_INCLUDE}")
@@ -60,22 +60,26 @@ if(CORTEX_BUILD_RECEIVER)
     endif()
     set(CUBISM_SDK_ROOT "" CACHE PATH "Extracted Cubism Native SDK with Core and Framework")
     if(CUBISM_SDK_ROOT AND MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-        find_package(directxtk CONFIG QUIET)
         find_library(CUBISM_CORE_RELEASE NAMES Live2DCubismCore_MD
             PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
         find_library(CUBISM_CORE_DEBUG NAMES Live2DCubismCore_MDd
             PATHS "${CUBISM_SDK_ROOT}/Core/lib/windows/x86_64/143" NO_DEFAULT_PATH)
     endif()
-    if(CUBISM_SDK_ROOT AND TARGET Microsoft::DirectXTK AND CUBISM_CORE_RELEASE AND CUBISM_CORE_DEBUG
+    if(CUBISM_SDK_ROOT AND CUBISM_CORE_RELEASE AND CUBISM_CORE_DEBUG
        AND EXISTS "${CUBISM_SDK_ROOT}/Core/include/Live2DCubismCore.h"
        AND EXISTS "${CUBISM_SDK_ROOT}/Framework/CMakeLists.txt")
         set(FRAMEWORK_SOURCE D3D11)
         add_subdirectory("${CUBISM_SDK_ROOT}/Framework" "${CMAKE_CURRENT_BINARY_DIR}/CubismFramework")
         target_include_directories(Framework PUBLIC "${CUBISM_SDK_ROOT}/Core/include")
-        target_link_libraries(Framework PRIVATE Microsoft::DirectXTK d3d11 d3dcompiler
+        target_link_libraries(Framework PUBLIC d3d11 d3dcompiler
             optimized "${CUBISM_CORE_RELEASE}" debug "${CUBISM_CORE_DEBUG}")
         target_link_libraries(cortex_processing PRIVATE Framework)
         target_compile_definitions(cortex_processing PUBLIC CORTEX_HAS_CUBISM)
+        # Embed the matching SDK shaders so loading is independent of the working directory.
+        set(CUBISM_SHADERS "${CUBISM_SDK_ROOT}/Framework/src/Rendering/D3D11/Shaders")
+        file(READ "${CUBISM_SHADERS}/CubismEffect.fx" CORTEX_CUBISM_EFFECT)
+        file(READ "${CUBISM_SHADERS}/CubismBlendMode.fx" CORTEX_CUBISM_BLEND)
+        configure_file(shaders/CubismShaderSource.h.in generated/CubismShaderSource.generated.h @ONLY)
     elseif(CUBISM_SDK_ROOT)
         message(STATUS "Cubism dependencies incomplete; using built-in avatar")
     endif()
@@ -84,6 +88,17 @@ if(CORTEX_BUILD_RECEIVER)
     target_compile_definitions(CortexStudioNative PRIVATE CORTEX_STUDIO_NATIVE_BUILD)
     target_link_libraries(CortexStudioNative PRIVATE cortex_processing d3dcompiler)
     set_target_properties(CortexStudioNative PROPERTIES OUTPUT_NAME CortexStudioNative)
+    set(FACE_MODEL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/face-tracking")
+    if(EXISTS "${FACE_MODEL_DIR}/lm_model1_opt.onnx")
+        add_custom_command(TARGET CortexStudioNative POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${FACE_MODEL_DIR}"
+                "$<TARGET_FILE_DIR:CortexStudioNative>/models/face-tracking")
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.deps/upper-body/pose_estimation_mediapipe_2023mar.onnx")
+        add_custom_command(TARGET CortexStudioNative POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/.deps/upper-body"
+                "$<TARGET_FILE_DIR:CortexStudioNative>/models/upper-body")
+    endif()
     if(ORT_DLLS)
         add_custom_command(TARGET cortex-receive POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ORT_DLLS} "$<TARGET_FILE_DIR:cortex-receive>" COMMAND_EXPAND_LISTS)
     endif()
@@ -102,6 +117,9 @@ if(CORTEX_BUILD_RECEIVER)
         add_executable(manager_tests tests/ManagerTests.cpp)
         target_link_libraries(manager_tests PRIVATE cortex_receiver)
         add_test(NAME manager_tests COMMAND manager_tests)
+        add_executable(head_pose_tests tests/HeadPoseTests.cpp)
+        target_link_libraries(head_pose_tests PRIVATE cortex_processing)
+        add_test(NAME head_pose_tests COMMAND head_pose_tests)
         add_executable(processing_tests tests/ProcessingTests.cpp)
         target_include_directories(processing_tests PRIVATE third_party/unitycapture)
         target_link_libraries(processing_tests PRIVATE cortex_processing)
@@ -112,6 +130,21 @@ if(CORTEX_BUILD_RECEIVER)
             add_custom_command(TARGET processing_tests POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FFMPEG_DLLS} "$<TARGET_FILE_DIR:processing_tests>" COMMAND_EXPAND_LISTS)
         endif()
         add_test(NAME processing_tests COMMAND processing_tests)
+        if(TARGET Framework AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../assets/avatars/Haru/Haru.model3.json")
+            add_executable(avatar_model_tests tests/AvatarModelTests.cpp)
+            target_link_libraries(avatar_model_tests PRIVATE cortex_processing)
+            add_test(NAME avatar_model_tests COMMAND avatar_model_tests
+                "${CMAKE_CURRENT_SOURCE_DIR}/../assets/avatars/Haru/Haru.model3.json"
+                "${CMAKE_CURRENT_BINARY_DIR}/haru-avatar.bmp")
+            set_tests_properties(avatar_model_tests PROPERTIES TIMEOUT 120)
+        endif()
+        if(ONNXRUNTIME_ROOT AND EXISTS "${FACE_MODEL_DIR}/lm_model1_opt.onnx")
+            add_executable(face_tracking_tests tests/FaceTrackingTests.cpp)
+            target_link_libraries(face_tracking_tests PRIVATE cortex_processing)
+            add_test(NAME face_tracking_tests COMMAND face_tracking_tests
+                "${FACE_MODEL_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/astronaut.png")
+            set_tests_properties(face_tracking_tests PROPERTIES TIMEOUT 45)
+        endif()
         add_executable(hardware_decoder_tests tests/HardwareDecoderTests.cpp)
         target_link_libraries(hardware_decoder_tests PRIVATE cortex_receiver)
         target_compile_definitions(hardware_decoder_tests PRIVATE CORTEX_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")

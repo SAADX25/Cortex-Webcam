@@ -17,7 +17,17 @@ struct CortexStudioState {
 enum CortexAvatarControl {
     CortexAvatarEnabled = 19,
     CortexAvatarTestMotion = 20,
-    CortexAvatarMode = 21
+    CortexAvatarMode = 21,
+    CortexAvatarMotion = 22,
+    CortexAvatarExpression = 23,
+    CortexAvatarScale = 24,
+    CortexAvatarPositionX = 25,
+    CortexAvatarPositionY = 26,
+    CortexAvatarSmoothing = 27,
+    CortexAvatarRecenter = 28,
+    CortexAvatarSensitivity = 29,
+    CortexAvatarArms = 30,
+    CortexAvatarMirror = 31
 };
 extern "C" {
 #ifdef CORTEX_STUDIO_NATIVE_BUILD

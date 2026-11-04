@@ -14,7 +14,12 @@ struct FilterSettings {
     float similarity{0.13f}, softness{0.10f}, spill{0.8f};
     bool transparent{false};
     bool avatarEnabled{}, avatarTestMotion{};
-    int avatarMode{0};
+    int avatarMode{0}, avatarMotion{-1}, avatarExpression{-1};
+    AvatarFraming avatarFraming;
+    float avatarSmoothing{.06f};
+    float avatarSensitivity{1.3f};
+    bool avatarArms{true}, avatarMirror{};
+    uint64_t avatarCalibration{};
     float backgroundZoom{1}, backgroundX{.5f}, backgroundY{.5f};
     bool backgroundFit{false};
     float background[3]{0.04f, 0.04f, 0.04f};
@@ -38,6 +43,7 @@ public:
     GpuImage exportFrame(bool preserveAlpha = false,
                          bool bottomUp = false);  // Straight RGBA or flattened opaque black.
     const FilterSettings& settings() const;
+    std::string avatarTrackingStatus() const;
 
 private:
     struct Impl;
