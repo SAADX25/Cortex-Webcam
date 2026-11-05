@@ -17,10 +17,40 @@ ArmPose mapArm(LandmarkPoint shoulder, LandmarkPoint elbow, LandmarkPoint wrist,
     if (!std::isfinite(a) || !std::isfinite(b) || !std::isfinite(confidence) || a < 3 || b < 3 ||
         confidence < .6f)
         return {};
-    const float lift = std::acos(std::clamp(uy / a, -1.f, 1.f)) / std::numbers::pi_v<float>;
-    const float bend =
+    const float upperLift = std::acos(std::clamp(uy / a, -1.f, 1.f)) / std::numbers::pi_v<float>;
+    // In a frontal 2D camera view, lifting a hand in front of the torso foreshortens
+    // the upper arm while raising the wrist above the elbow. Combine upper-arm
+    // angle with wrist elevation so forward gestures also lift the avatar's shoulder.
+    const float wristRaise = vy < 0.f ? std::clamp((elbow.y - wrist.y) / (a + b), 0.f, 1.f) : 0.f;
+    const float lift = std::clamp(upperLift * 1.35f + wristRaise * 0.55f, 0.f, 1.f);
+    const float rawBend =
         std::acos(std::clamp((ux * vx + uy * vy) / (a * b), -1.f, 1.f)) / std::numbers::pi_v<float>;
+    const float bend = std::clamp(rawBend * 1.25f, 0.f, 1.f);
     return {lift, bend, std::clamp(confidence, 0.f, 1.f)};
+}
+void mapHand(ArmPose& arm, LandmarkPoint elbow, LandmarkPoint wrist, LandmarkPoint pinky,
+             LandmarkPoint index, LandmarkPoint thumb, float confidence) {
+    arm.handConfidence = 0;
+    if (arm.confidence <= 0 || !std::isfinite(confidence) || confidence < .5f)
+        return;
+    const float fx = wrist.x - elbow.x, fy = wrist.y - elbow.y;
+    const float forearm = std::hypot(fx, fy);
+    const float hx = (pinky.x + index.x) * .5f - wrist.x, hy = (pinky.y + index.y) * .5f - wrist.y;
+    const float handLen = std::hypot(hx, hy);
+    if (!std::isfinite(forearm) || !std::isfinite(handLen) || forearm < 5 || handLen < 2)
+        return;
+    // Signed angle forearm -> hand direction, ±90° maps to ±1.
+    const float cross = fx * hy - fy * hx, dot = fx * hx + fy * hy;
+    arm.wrist = std::clamp(std::atan2(cross, dot) / (std::numbers::pi_v<float> * .5f), -1.f, 1.f);
+    // A fist pulls the fingertips back to the wrist and together; an open hand
+    // reaches ~0.35-0.45 forearm lengths with a wide index/pinky/thumb spread.
+    const float reach = handLen / forearm;
+    const float spread = (std::hypot(index.x - pinky.x, index.y - pinky.y) +
+                          std::hypot(thumb.x - index.x, thumb.y - index.y)) / forearm;
+    const float openReach = std::clamp((reach - .18f) / (.38f - .18f), 0.f, 1.f);
+    const float openSpread = std::clamp((spread - .12f) / (.30f - .12f), 0.f, 1.f);
+    arm.hand = std::clamp(.6f * openReach + .4f * openSpread, 0.f, 1.f);
+    arm.handConfidence = std::clamp(confidence, 0.f, 1.f);
 }
 BodyAngles mapBodyAngles(LandmarkPoint leftShoulder, LandmarkPoint rightShoulder,
                          float leftShoulderZ, float rightShoulderZ,
@@ -113,6 +143,11 @@ struct BodyTracker::Impl {
     Ort::Session detector{nullptr}, pose{nullptr};
     std::vector<Vec> anchor = anchors();
     std::vector<float> input;
+    Vec smoothHip{};
+    Vec smoothUp{0.f, -1.f};
+    float smoothRadius{};
+    unsigned lastW{}, lastH{};
+    bool hasRoi{};
 };
 BodyTracker::BodyTracker(const std::filesystem::path& directory)
     : impl_(std::make_unique<Impl>()) {
@@ -131,6 +166,11 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
     if (!w || !h || image.size() != size_t(w) * h * 4)
         throw std::invalid_argument("Invalid body tracking image");
     auto& s = *impl_;
+    if (w != s.lastW || h != s.lastH) {
+        s.hasRoi = false;
+        s.lastW = w;
+        s.lastH = h;
+    }
     constexpr int d = 224, p = 256;
     const float scale = static_cast<float>(std::max(w, h));
     const float ratio = d / scale;
@@ -157,7 +197,7 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
     if (!score || !box)
         throw std::runtime_error("Unexpected MediaPipe person output");
     int best = -1;
-    float confidence = .6f;
+    float confidence = .5f;
     for (int i = 0; i < 2254; ++i) {
         const float v = sigmoid(score[i]);
         if (std::isfinite(v) && v > confidence) {
@@ -165,17 +205,49 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
             best = i;
         }
     }
-    if (best < 0)
+    if (best < 0) {
+        s.hasRoi = false;
         return {};
+    }
     const auto point = [&](int i) {
         return Vec{(box[best * 12 + 4 + 2 * i] / d + s.anchor[best].x) * scale - left / ratio,
                    (box[best * 12 + 5 + 2 * i] / d + s.anchor[best].y) * scale - top / ratio};
     };
-    const auto hip = point(0), full = point(1);
-    const float radius = std::hypot(full.x - hip.x, full.y - hip.y);
-    if (!std::isfinite(radius) || radius < 15 || radius > scale * 3)
+    const auto rawHip = point(0), rawFull = point(1);
+    const float rawDist = std::hypot(rawFull.x - rawHip.x, rawFull.y - rawHip.y);
+    if (!std::isfinite(rawDist) || rawDist < 15 || rawDist > scale * 3) {
+        s.hasRoi = false;
         return {};
-    const Vec up{(full.x - hip.x) / radius, (full.y - hip.y) / radius}, right{-up.y, up.x};
+    }
+    // Enlarge the crop slightly so raised elbows and wrists remain inside the 256x256 ROI,
+    // and low-pass filter the detector ROI across frames to prevent crop-induced landmark jitter.
+    const float rawRadius = rawDist * 1.15f;
+    const Vec rawUp{(rawFull.x - rawHip.x) / rawDist, (rawFull.y - rawHip.y) / rawDist};
+    if (!s.hasRoi ||
+        std::hypot(rawHip.x - s.smoothHip.x, rawHip.y - s.smoothHip.y) > rawRadius * 0.5f ||
+        std::abs(rawRadius - s.smoothRadius) > rawRadius * 0.4f) {
+        s.smoothHip = rawHip;
+        s.smoothRadius = rawRadius;
+        s.smoothUp = rawUp;
+        s.hasRoi = true;
+    } else {
+        constexpr float roiAlpha = 0.35f;
+        s.smoothHip.x += roiAlpha * (rawHip.x - s.smoothHip.x);
+        s.smoothHip.y += roiAlpha * (rawHip.y - s.smoothHip.y);
+        s.smoothRadius += roiAlpha * (rawRadius - s.smoothRadius);
+        s.smoothUp.x += roiAlpha * (rawUp.x - s.smoothUp.x);
+        s.smoothUp.y += roiAlpha * (rawUp.y - s.smoothUp.y);
+        const float upLen = std::hypot(s.smoothUp.x, s.smoothUp.y);
+        if (upLen > 1e-4f) {
+            s.smoothUp.x /= upLen;
+            s.smoothUp.y /= upLen;
+        } else {
+            s.smoothUp = rawUp;
+        }
+    }
+    const Vec hip = s.smoothHip;
+    const float radius = s.smoothRadius;
+    const Vec up = s.smoothUp, right{-up.y, up.x};
     const auto camera = [&](float x, float y) {
         return LandmarkPoint{hip.x + right.x * x + up.x * y, hip.y + right.y * x + up.y * y};
     };
@@ -200,31 +272,70 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
     }
     if (!landmarks)
         throw std::runtime_error("Unexpected MediaPipe pose output");
-    if (!std::isfinite(presence) || presence < .6f)
+    if (!std::isfinite(presence) || presence < .5f) {
+        s.hasRoi = false;
         return {};
+    }
     std::array<LandmarkPoint, 33> points{};
     std::array<float, 33> visibility{};
+    const float marginX = w * 0.25f, marginY = h * 0.35f;
     for (int i = 0; i < 33; ++i) {
         points[i] = camera((landmarks[i * 5] / p - .5f) * 2 * radius,
                            (.5f - landmarks[i * 5 + 1] / p) * 2 * radius);
-        visibility[i] = std::min(sigmoid(landmarks[i * 5 + 3]), sigmoid(landmarks[i * 5 + 4]));
-        if (!std::isfinite(points[i].x) || !std::isfinite(points[i].y) || points[i].x < 0 ||
-            points[i].x >= w || points[i].y < 0 || points[i].y >= h)
+        const float vis = sigmoid(landmarks[i * 5 + 3]);
+        const float pres = sigmoid(landmarks[i * 5 + 4]);
+        visibility[i] = (i >= 13 && i <= 22) ? (vis * (0.35f + 0.65f * pres))
+                                             : std::min(vis, pres);
+        if (!std::isfinite(points[i].x) || !std::isfinite(points[i].y) ||
+            points[i].x < -marginX || points[i].x >= w + marginX ||
+            points[i].y < -marginY || points[i].y >= h + marginY)
             visibility[i] = 0;
     }
     const float shoulderConfidence = std::min(visibility[11], visibility[12]);
-    if (!std::isfinite(shoulderConfidence) || shoulderConfidence < .6f)
+    if (!std::isfinite(shoulderConfidence) || shoulderConfidence < .55f)
         return {};
     const auto arm = [&](int shoulder, int elbow, int wrist) {
-        return mapArm(points[shoulder], points[elbow], points[wrist],
-                      std::min({visibility[shoulder], visibility[elbow], visibility[wrist]}));
+        const float fullConf = std::min({visibility[shoulder], visibility[elbow], visibility[wrist]});
+        if (fullConf >= .6f)
+            return mapArm(points[shoulder], points[elbow], points[wrist], fullConf);
+        // In closer upper-body framing, the shoulder and elbow may be clearly
+        // visible while the wrist touches the edge of the frame.
+        const float upperConf = std::min(visibility[shoulder], visibility[elbow]);
+        if (upperConf >= .6f) {
+            const float ux = points[elbow].x - points[shoulder].x;
+            const float uy = points[elbow].y - points[shoulder].y;
+            const float len = std::hypot(ux, uy);
+            if (std::isfinite(len) && len >= 3.f) {
+                const LandmarkPoint extrapolatedWrist{points[elbow].x + ux, points[elbow].y + uy};
+                auto partial = mapArm(points[shoulder], points[elbow], extrapolatedWrist, upperConf);
+                if (visibility[wrist] >= .35f) {
+                    const auto withWrist =
+                        mapArm(points[shoulder], points[elbow], points[wrist], upperConf);
+                    partial.bend = withWrist.bend;
+                    partial.lift = std::max(partial.lift, withWrist.lift);
+                }
+                return partial;
+            }
+        }
+        return ArmPose{};
     };
     const bool hasHips = visibility[23] >= 0.4f && visibility[24] >= 0.4f;
+    // Normalize Z from 256-pixel pose crop space into [-1, 1] before angle mapping.
+    constexpr float invP = 1.f / p;
     const auto angles = mapBodyAngles(points[11], points[12],
-                                      landmarks[11 * 5 + 2], landmarks[12 * 5 + 2],
-                                      landmarks[23 * 5 + 2], landmarks[24 * 5 + 2],
+                                      landmarks[11 * 5 + 2] * invP, landmarks[12 * 5 + 2] * invP,
+                                      landmarks[23 * 5 + 2] * invP, landmarks[24 * 5 + 2] * invP,
                                       hasHips);
-    return {arm(11, 13, 15), arm(12, 14, 16), presence * shoulderConfidence,
+    // Pose landmarks: 15/16 wrist, 17/18 pinky, 19/20 index, 21/22 thumb.
+    auto leftArm = arm(11, 13, 15), rightArm = arm(12, 14, 16);
+    const auto hand = [&](ArmPose& a, int elbow, int wrist, int pinky, int index, int thumb) {
+        mapHand(a, points[elbow], points[wrist], points[pinky], points[index], points[thumb],
+                std::min({visibility[wrist], visibility[pinky], visibility[index],
+                          visibility[thumb]}));
+    };
+    hand(leftArm, 13, 15, 17, 19, 21);
+    hand(rightArm, 14, 16, 18, 20, 22);
+    return {leftArm, rightArm, std::max(.61f, presence * shoulderConfidence),
             angles.angleX, angles.angleY, angles.angleZ};
 }
 #else

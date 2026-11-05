@@ -306,6 +306,9 @@ class OnnxFaceTracker final : public FaceTracker {
     void workBody(const std::filesystem::path& directory) noexcept {
         std::unique_ptr<BodyTracker> tracker;
         Clock::time_point retry{};
+        ArmPose prevLeft{}, prevRight{};
+        Clock::time_point prevLeftTime{}, prevRightTime{};
+        uint64_t prevGen = UINT64_MAX, prevBodyGen = UINT64_MAX;
         for (;;) {
             TrackingImage image;
             {
@@ -321,12 +324,36 @@ class OnnxFaceTracker final : public FaceTracker {
             }
             if (!bodyEnabled_ || Clock::now() - image.captured > std::chrono::milliseconds(250))
                 continue;
+            if (image.generation != prevGen || image.bodyGeneration != prevBodyGen) {
+                prevLeft = prevRight = {};
+                prevLeftTime = prevRightTime = {};
+                prevGen = image.generation;
+                prevBodyGen = image.bodyGeneration;
+            }
             try {
                 if (!tracker && Clock::now() >= retry)
                     tracker = std::make_unique<BodyTracker>(directory.parent_path() / "upper-body");
                 if (!tracker)
                     continue;
-                const auto body = tracker->track(image.rgba, image.width, image.height);
+                auto body = tracker->track(image.rgba, image.width, image.height);
+                // Hold the last valid arm pose briefly across 1-2 frame dropouts during fast motion
+                if (body.left.confidence >= .6f) {
+                    prevLeft = body.left;
+                    prevLeftTime = image.captured;
+                } else if (prevLeft.confidence >= .6f &&
+                           image.captured - prevLeftTime <= std::chrono::milliseconds(180)) {
+                    body.left = prevLeft;
+                }
+                if (body.right.confidence >= .6f) {
+                    prevRight = body.right;
+                    prevRightTime = image.captured;
+                } else if (prevRight.confidence >= .6f &&
+                           image.captured - prevRightTime <= std::chrono::milliseconds(180)) {
+                    body.right = prevRight;
+                }
+                body.confidence =
+                    std::max({body.confidence, body.left.confidence, body.right.confidence});
+                body.capturedAt = image.captured;
                 std::lock_guard lock(mutex_);
                 if (bodyEnabled_ && image.generation == inputGeneration_ &&
                     image.bodyGeneration == bodyGeneration_) {
@@ -379,7 +406,7 @@ class OnnxFaceTracker final : public FaceTracker {
                                              ? gazeModel->GetInputNameAllocated(0, allocator).get()
                                              : "";
             Box face{};
-            unsigned count = 0, previousWidth = 0, previousHeight = 0;
+            unsigned previousWidth = 0, previousHeight = 0;
             uint64_t previousGeneration = UINT64_MAX;
             std::vector<float> tensor, gazeTensor;
             {
@@ -407,7 +434,7 @@ class OnnxFaceTracker final : public FaceTracker {
                     previousWidth = image.width;
                     previousHeight = image.height;
                 }
-                if (face.width < 4 || ++count % 45 == 0) {
+                if (face.width < 4) {
                     input(image, {0, 0, float(image.width), float(image.height)}, tensor);
                     auto outputs = run(detector, detectName.get(), tensor);
                     const auto shape = outputs.at(0).GetTensorTypeAndShapeInfo().GetShape();
@@ -448,16 +475,47 @@ class OnnxFaceTracker final : public FaceTracker {
                     for (int i = 0; i < 66; ++i) {
                         const float* map = data + i * cells;
                         const auto peak = std::max_element(map, map + cells);
-                        const auto index = peak - map;
+                        const int peakIdx = static_cast<int>(peak - map);
+                        const int pr = peakIdx / 28, pc = peakIdx % 28;
                         const auto logit = [](float p) {
                             p = std::clamp(p, .0000001f, .9999999f);
                             return std::log(p / (1 - p)) / 16;
                         };
+                        // Soft-argmax across the 3x3 neighborhood when adjacent heatmap cells
+                        // are close to the peak so a landmark does not hop discretely between cells.
+                        float sumW = 0.f, sumX = 0.f, sumY = 0.f;
+                        const float minNeighbor = std::max(0.1f, *peak * 0.75f);
+                        for (int dr = -1; dr <= 1; ++dr) {
+                            const int r = pr + dr;
+                            if (r < 0 || r >= 28)
+                                continue;
+                            for (int dc = -1; dc <= 1; ++dc) {
+                                const int c = pc + dc;
+                                if (c < 0 || c >= 28)
+                                    continue;
+                                const int idx = r * 28 + c;
+                                const float w = map[idx];
+                                if (std::isfinite(w) && w >= minNeighbor) {
+                                    const float weight = w * w * w * w;
+                                    const float cellY =
+                                        float(r) / 27 + logit(data[(66 + i) * cells + idx]);
+                                    const float cellX =
+                                        float(c) / 27 + logit(data[(132 + i) * cells + idx]);
+                                    if (std::isfinite(cellX) && std::isfinite(cellY)) {
+                                        sumW += weight;
+                                        sumX += weight * cellX;
+                                        sumY += weight * cellY;
+                                    }
+                                }
+                            }
+                        }
                         // OpenSeeFace offset planes are row (Y), then column (X).
-                        const float y =
-                            float(index / 28) / 27 + logit(data[(66 + i) * cells + index]);
-                        const float x =
-                            float(index % 28) / 27 + logit(data[(132 + i) * cells + index]);
+                        const float y = sumW > 0.f
+                                            ? sumY / sumW
+                                            : float(pr) / 27 + logit(data[(66 + i) * cells + peakIdx]);
+                        const float x = sumW > 0.f
+                                            ? sumX / sumW
+                                            : float(pc) / 27 + logit(data[(132 + i) * cells + peakIdx]);
                         points[i] = {crop.x + crop.width * (223.f / 224) * x,
                                      crop.y + crop.height * (223.f / 224) * y};
                         pointConfidence[i] = *peak;
@@ -529,6 +587,19 @@ class OnnxFaceTracker final : public FaceTracker {
                         f.lowerLip = points[64];
                         f.leftEyeOpen = eye(36);
                         f.rightEyeOpen = eye(42);
+                        // Wink support: landmark models tend to couple both eyelids, so when
+                        // one eye is clearly open and the other clearly more closed, separate
+                        // them further so a one-eye close shows on the avatar.
+                        {
+                            float& openEye = f.leftEyeOpen >= f.rightEyeOpen ? f.leftEyeOpen
+                                                                             : f.rightEyeOpen;
+                            float& closedEye = f.leftEyeOpen >= f.rightEyeOpen ? f.rightEyeOpen
+                                                                               : f.leftEyeOpen;
+                            if (openEye > 0.55f && openEye - closedEye > 0.30f) {
+                                openEye = std::min(1.f, openEye + (1.f - openEye) * 0.6f);
+                                closedEye *= 0.4f;
+                            }
+                        }
                         f.eyeOpen = (f.leftEyeOpen + f.rightEyeOpen) * .5f;
                         f.gazeX = f.gazeY = 0;
                         if (gazeModel)
@@ -595,7 +666,16 @@ class OnnxFaceTracker final : public FaceTracker {
                             y1 = std::min(y1, p.y);
                             y2 = std::max(y2, p.y);
                         }
-                        face = clampBox({x1, y1, x2 - x1, y2 - y1}, image);
+                        const auto nextFace = clampBox({x1, y1, x2 - x1, y2 - y1}, image);
+                        if (face.width >= 4 && face.height >= 4) {
+                            face = clampBox({face.x * .60f + nextFace.x * .40f,
+                                             face.y * .60f + nextFace.y * .40f,
+                                             face.width * .60f + nextFace.width * .40f,
+                                             face.height * .60f + nextFace.height * .40f},
+                                            image);
+                        } else {
+                            face = nextFace;
+                        }
                     } else
                         face = {};
                 }
@@ -679,7 +759,7 @@ public:
                     pending_ = std::move(image);
                     if (bodyEnabled_ && now >= nextBodySubmit_) {
                         pendingBody_ = *pending_;
-                        nextBodySubmit_ = now + std::chrono::milliseconds(80);
+                        nextBodySubmit_ = now + std::chrono::milliseconds(25);
                     }
                 }
                 wake_

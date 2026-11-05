@@ -16,7 +16,7 @@ public:
 
 private:
     AvatarPose output_;
-    std::array<double, 6> derivative_{};
+    std::array<double, 21> derivative_{};
     bool initialized_{};
 };
 }  // namespace cortex

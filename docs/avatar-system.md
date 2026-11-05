@@ -60,7 +60,18 @@ The Avatar system allows Cortex Studio to replace the camera feed with either an
 
 ### 3. Motion Sources
 - **Procedural Test Animation**: Generates continuous trigonometric cycles (sine/cosine waves) simulating natural head sway, breathing, blinking, and mouth movements. Allows verifying the rendering and virtual camera pipelines without a physical camera or phone connected.
-- **Camera Face Tracking**: Uses `BuiltinFaceTracker` to analyze NV12 luminance frames from the live camera stream. Computes spatial moments, facial centroid, eye span, and mouth aperture to drive `AvatarPose` in real time with temporal exponential smoothing to eliminate jitter.
+- **Camera Tracking**: The packaged ONNX tracker analyzes reduced-size upright camera frames with OpenSeeFace face/pupil models and MediaPipe upper-body models. Face and body inference run on separate workers. Perspective head fitting and speed-adaptive smoothing drive `AvatarPose`; the built-in tracker remains a fallback when ONNX support is unavailable.
+
+### Independent camera tracking samples (Desktop 0.10.1)
+
+The ONNX face and upper-body workers complete independently. Each result carries
+its camera capture timestamp, and the render pipeline filters face and body on
+their own sample clocks. Reusing a cached face must neither discard a new arm
+measurement nor repeatedly advance the face filter. Losing the face only eases
+the face toward neutral; visible torso and arms remain driven by their own fresh
+measurements. Disabling body tracking clears its sample/filter state immediately.
+Torso confidence is preserved even when elbows or wrists are outside the frame.
+These changes run entirely on Windows and require no Android sender update.
 
 ### 4. Seamless Mode Transitions
 - **Instant Camera Restoration**: Disabling Avatar mode immediately restores the original video feed, background video/image compositing, and chroma key / AI matting without requiring a stream restart.
@@ -68,7 +79,7 @@ The Avatar system allows Cortex Studio to replace the camera feed with either an
 
 ## UI Controls
 
-In Cortex Studio's **Appearance** tab:
+In Cortex Studio's **Avatar** tab:
 1. **Use test avatar** (`AvatarEnabled`): Toggles avatar mode on/off.
 2. **Character Model Selection**:
    - **GPU Test Avatar**: Built-in procedural rendering.

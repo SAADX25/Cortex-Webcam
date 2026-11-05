@@ -327,7 +327,7 @@
     <Setter Property="Template">
       <Setter.Value>
         <ControlTemplate TargetType="TabItem">
-          <Border x:Name="Tab" BorderThickness="0,0,0,2" BorderBrush="Transparent" Padding="10,14,10,12" Background="Transparent">
+          <Border x:Name="Tab" BorderThickness="0,0,0,2" BorderBrush="Transparent" Padding="6,13,6,11" Background="Transparent">
             <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" />
           </Border>
           <ControlTemplate.Triggers>

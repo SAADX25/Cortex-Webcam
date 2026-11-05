@@ -279,8 +279,24 @@ int main(int argc, char** argv) {
         controls->arms.bodyAngleZ = -6.f;
         frame->readyAt = std::chrono::steady_clock::now();
         const auto bodyTurned = read(gpu, processor.render(live));
-        check(changedPixels(raised, bodyTurned) > 500,
+        check(changedPixels(bentElbow, bodyTurned) > 500,
               "Tracked body angles must deform the Live2D body parameters");
+        // Keep every arm/head channel fixed so a shoulder or elbow change cannot
+        // accidentally satisfy the body-parameter rendering regression.
+        controls->arms.bodyAngleX = controls->arms.bodyAngleZ = 0.f;
+        frame->readyAt = std::chrono::steady_clock::now();
+        const auto bodyNeutral = read(gpu, processor.render(live));
+        controls->arms.bodyAngleX = -8.f;
+        frame->readyAt = std::chrono::steady_clock::now();
+        const auto bodyYaw = read(gpu, processor.render(live));
+        check(changedPixels(bodyNeutral, bodyYaw) > 500,
+              "Torso yaw must independently deform Ren with fixed head and arms");
+        controls->arms.bodyAngleX = 0.f;
+        controls->arms.bodyAngleZ = 8.f;
+        frame->readyAt = std::chrono::steady_clock::now();
+        const auto bodyRoll = read(gpu, processor.render(live));
+        check(changedPixels(bodyNeutral, bodyRoll) > 500,
+              "Torso roll must independently deform Ren with fixed head and arms");
         auto raisedPath = std::filesystem::path(argv[2]);
         raisedPath.replace_filename("ren-camera-arms.bmp");
         saveBmp(raisedPath, raised, 960, 720);

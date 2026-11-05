@@ -16,6 +16,11 @@ private:
 // Stable arm geometry shared by model inference and unit tests.
 ArmPose mapArm(LandmarkPoint shoulder, LandmarkPoint elbow, LandmarkPoint wrist, float confidence);
 
+// Wrist bend and hand openness from MediaPipe Pose hand landmarks (pinky,
+// index and thumb tips). Updates arm.wrist/hand/handConfidence in place.
+void mapHand(ArmPose& arm, LandmarkPoint elbow, LandmarkPoint wrist, LandmarkPoint pinky,
+             LandmarkPoint index, LandmarkPoint thumb, float confidence);
+
 // Stable body angle geometry mapped to Live2D [-10, 10] range.
 struct BodyAngles {
     float angleX{}, angleY{}, angleZ{};

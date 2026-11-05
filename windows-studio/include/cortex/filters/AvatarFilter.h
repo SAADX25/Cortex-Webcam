@@ -15,11 +15,16 @@ struct HeadRotation {
 };
 struct ArmPose {
     float lift{}, bend{}, confidence{};
+    // Wrist bend relative to the forearm in [-1, 1] (±90°) and hand openness in
+    // [0, 1] (0 = fist, 1 = spread). handConfidence 0 means "not measured".
+    float wrist{}, hand{.5f}, handConfidence{};
 };
 struct UpperBodyPose {
     ArmPose left, right;
     float confidence{};
     float bodyAngleX{}, bodyAngleY{}, bodyAngleZ{};
+    // Body inference runs independently of face inference; use its own sample clock.
+    std::chrono::steady_clock::time_point capturedAt;
 };
 struct AvatarPose {
     float yaw{}, pitch{}, roll{}, mouth{}, eyeOpen{1}, gazeX{}, gazeY{};

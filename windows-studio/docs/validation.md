@@ -1,5 +1,27 @@
 # Validation — 2026-11-02
 
+## Desktop 0.10.1 — independent face/body samples (2026-11-05)
+
+- Reproduced the dropped-body-update bug with a controlled tracker: changing
+  arm/torso measurements while holding the face capture timestamp failed the
+  regression before the pipeline fix.
+- Face and body now have independent capture timestamps, adaptive filters and
+  sample clocks. Body remains responsive when face inference is cached or lost;
+  missing phone/body input eases toward rest. Arm toggles and input rotation
+  reset the body state. Shoulder-based torso confidence survives hidden arms.
+- Release native build and self-contained Windows UI publish succeeded. All 12
+  native tests passed across the final runs, including real ONNX fixture
+  inference, cached-sample/face-loss/body-loss regressions and actual Ren pixel
+  checks for independent torso yaw, torso roll and elbow bend. The UDP
+  auto-connect test needed execution outside the network-isolated sandbox.
+- All 50 WPF layout/focus checks passed at 1080x720, 1280x800, 1440x900 and
+  1920x1080. Existing uncommitted tracking and UI changes were preserved.
+- No Android update is required by this change. These automated and rendered
+  checks do not establish tracking accuracy for the user's live physical motion.
+- Launched the packaged Desktop 0.10.1 and observed the physical Samsung
+  SM-S928B reconnect at 1920x1080, approximately 30 fps and zero packet gaps.
+  Original camera framing was close and did not show all elbows/wrists.
+
 Built with MSVC 19.51 / Visual Studio 2026, Windows SDK 10.0.26100.0, C++20, and FFmpeg 9.0.2 shared headers/import libraries/DLLs. Downloaded development archive SHA-256 verified against its publisher's checksum: `4d2060a8b34a940aa47d785142055bb92a63053781e55f2ace4546edd519a8f5`.
 
 * Native receiver and diagnostic executable: build passed.

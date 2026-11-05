@@ -41,7 +41,7 @@ internal static class Program
                   "Camera tracking must enable avatar, disable demo and allow calibration");
             avatar.IsChecked = false;
             Check(((Slider)window.FindName("AvatarSensitivity")).Value == 1.3 &&
-                  ((CheckBox)window.FindName("AvatarArms")).IsChecked == false,
+                  ((CheckBox)window.FindName("AvatarArms")).IsChecked == true,
                   "Live head sensitivity and arm tracking defaults must be present");
             Check(((CheckBox)window.FindName("AvatarFollowPosition")).IsChecked == true &&
                   ((CheckBox)window.FindName("AvatarMirror")).IsChecked != true,
@@ -133,7 +133,7 @@ internal static class Program
                 var inspectorPosition = inspector.TranslatePoint(new Point(), root);
                 Check(inspectorPosition.X >= 0 && inspectorPosition.X + inspector.ActualWidth <= size.Width, $"Inspector clipped at {size}");
                 var oldWidth = preview.ActualWidth;
-                tabs.SelectedIndex = 1;
+                tabs.SelectedIndex = 2;
                 Layout();
                 Check(((FrameworkElement)window.FindName("OutputToggle")).ActualWidth > 100, $"Output controls are not usable at {size}");
                 focus.Invoke(window, new object[] { true });
@@ -141,10 +141,13 @@ internal static class Program
                 Check(preview.ActualWidth > oldWidth + 400, $"Focus preview does not expand at {size}");
                 focus.Invoke(window, new object[] { false });
                 Layout();
-                Check(Math.Abs(preview.ActualWidth - oldWidth) < 1 && tabs.SelectedIndex == 1, $"Focus mode loses layout/tab state at {size}");
+                Check(Math.Abs(preview.ActualWidth - oldWidth) < 1 && tabs.SelectedIndex == 2, $"Focus mode loses layout/tab state at {size}");
+                tabs.SelectedIndex = 1;
+                Layout();
+                Check(((Button)window.FindName("AiButton")).ActualWidth > 200, $"Background controls clipped at {size}");
                 tabs.SelectedIndex = 0;
                 Layout();
-                Check(((Button)window.FindName("AiButton")).ActualWidth > 200, $"Appearance controls clipped at {size}");
+                Check(((CheckBox)window.FindName("AvatarEnabled")).ActualWidth > 80, $"Avatar controls clipped at {size}");
                 Console.WriteLine($"Layout and focus passed: {size.Width} x {size.Height}");
             }
             Check(workspace.ColumnDefinitions.Count == 3, "Workspace column contract changed");

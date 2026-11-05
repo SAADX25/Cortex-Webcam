@@ -97,10 +97,12 @@ std::shared_ptr<VideoFrame> imageFrame(const std::shared_ptr<GpuDevice>& gpu,
 class FixtureTracker final : public FaceTracker {
 public:
     FaceLandmarks face{{10, 10}, {30, 10}, {24, 23}, {20, 26}, {20, 31}, .5f, 0, 0, 0, 1};
-    std::optional<FaceLandmarks> track(const VideoFrame&) override { return face; }
-    std::optional<UpperBodyPose> upperBody() const override {
-        return UpperBodyPose{{.5f, .7f, .9f}, {.2f, .3f, .9f}, .9f};
+    UpperBodyPose body{{.5f, .7f, .9f}, {.2f, .3f, .9f}, .9f};
+    bool faceVisible{true};
+    std::optional<FaceLandmarks> track(const VideoFrame&) override {
+        return faceVisible ? std::optional(face) : std::nullopt;
     }
+    std::optional<UpperBodyPose> upperBody() const override { return body; }
 };
 class RecordingAvatar final : public AvatarModel {
 public:
@@ -132,6 +134,23 @@ int main(int argc, char** argv) {
               "Arm geometry must distinguish a lowered straight arm from a raised bent arm");
         check(mapArm({10, 10}, {10, 40}, {10, 70}, .2f).confidence == 0,
               "Occluded wrist must not drive a pose");
+        {
+            // Forearm points down 30 px; open hand reaches 12 px with wide spread,
+            // fist keeps fingertips 3 px from the wrist and together.
+            auto open = mapArm({10, 10}, {10, 40}, {10, 70}, .9f);
+            mapHand(open, {10, 40}, {10, 70}, {6, 82}, {14, 82}, {20, 76}, .9f);
+            auto fist = mapArm({10, 10}, {10, 40}, {10, 70}, .9f);
+            mapHand(fist, {10, 40}, {10, 70}, {9.5f, 73}, {10.5f, 73}, {11, 72}, .9f);
+            check(open.handConfidence > 0 && fist.handConfidence > 0 && open.hand > .8f &&
+                      fist.hand < .2f && std::abs(open.wrist) < .1f,
+                  "Hand geometry must distinguish an open hand from a fist");
+            auto bent = mapArm({10, 10}, {10, 40}, {10, 70}, .9f);
+            mapHand(bent, {10, 40}, {10, 70}, {22, 66}, {22, 74}, {20, 78}, .9f);
+            check(std::abs(bent.wrist) > .8f, "A wrist bent 90 degrees must reach the limit");
+            auto hidden = mapArm({10, 10}, {10, 40}, {10, 70}, .9f);
+            mapHand(hidden, {10, 40}, {10, 70}, {6, 82}, {14, 82}, {20, 76}, .2f);
+            check(hidden.handConfidence == 0, "Occluded hand must not drive the fingers");
+        }
         const auto bodyTilt = mapBodyAngles({20, 25}, {10, 20}, 0.5f, -0.5f, 0.2f, -0.2f, true);
         check(bodyTilt.angleZ > 0 && bodyTilt.angleX > 0,
               "Body angle mapping must recover tilt and rotation");
@@ -291,9 +310,11 @@ int main(int argc, char** argv) {
                   std::abs(recorded->pose.positionY) < .001f && recorded->pose.mouth > .9f,
               "Recenter must zero head angles and position, preserving mouth and blink");
         check(recorded->pose.depthScale == 1, "Recenter must establish the reference camera distance");
+        settings.avatarMirror = false;
         settings.avatarSmoothing = .06f;
         processor.setSettings(settings);
         controlled->face.capturedAt = std::chrono::steady_clock::now();
+        controlled->body.capturedAt = controlled->face.capturedAt;
         controlled->face.headRotation = HeadRotation{5, 35, 0};
         frame->readyAt = controlled->face.capturedAt;
         processor.render(scene);
@@ -303,6 +324,52 @@ int main(int argc, char** argv) {
         processor.render(scene);
         check(recorded->pose.yaw == once.yaw && recorded->pose.depthScale == once.depthScale,
               "Rendering the same inference twice must not manufacture new motion samples");
+        controlled->body.left.lift = .95f;
+        controlled->body.bodyAngleZ = 12.f;
+        controlled->body.capturedAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        check(recorded->pose.arms.left.lift > once.arms.left.lift + .001f &&
+                  recorded->pose.bodyAngleZ > once.bodyAngleZ + .001f &&
+                  recorded->pose.yaw == once.yaw,
+              "A new body sample must move arms and torso while the face sample is unchanged");
+        const auto bodyOnce = recorded->pose;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        frame->readyAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        check(recorded->pose.arms.left.lift == bodyOnce.arms.left.lift &&
+                  recorded->pose.bodyAngleZ == bodyOnce.bodyAngleZ &&
+                  recorded->pose.yaw == bodyOnce.yaw,
+              "A fresh render frame must not replay either cached inference sample");
+        settings.avatarSmoothing = 0;
+        processor.setSettings(settings);
+        controlled->faceVisible = false;
+        controlled->body.left.lift = .15f;
+        controlled->body.bodyAngleZ = -7.f;
+        controlled->body.capturedAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        check(std::abs(recorded->pose.arms.left.lift - .15f) < .001f &&
+                  std::abs(recorded->pose.bodyAngleZ + 7.f) < .001f,
+              "Face loss must not overwrite a fresh independent body measurement");
+        settings.avatarSmoothing = .06f;
+        processor.setSettings(settings);
+        processor.render(SceneSnapshot{});
+        const auto firstLoss = recorded->pose;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        processor.render(SceneSnapshot{});
+        check(recorded->pose.arms.left.confidence == 0 &&
+                  std::abs(recorded->pose.bodyAngleZ) < std::abs(firstLoss.bodyAngleZ),
+              "Losing the phone input must keep decaying the body on render ticks");
+        settings.avatarSmoothing = 0;
+        processor.setSettings(settings);
+        controlled->faceVisible = true;
+        frame->readyAt = std::chrono::steady_clock::now();
+        processor.render(scene);
+        settings.avatarArms = false;
+        processor.setSettings(settings);
+        processor.render(scene);
+        check(!recorded->pose.armsEnabled && recorded->pose.arms.left.confidence == 0 &&
+                  recorded->pose.arms.right.confidence == 0,
+              "Disabling arms must take effect even with a cached face sample");
         settings.avatarTestMotion = true;
         processor.setSettings(settings);
         processor.render(scene);

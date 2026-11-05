@@ -95,6 +95,58 @@ int main() {
             check(std::abs(adaptive.yaw - 30) < 2 &&
                       std::abs(adaptive.positionX - .2f) < .012f,
                   "30/60/120fps trajectories must stay within the same movement error bounds");
+
+            filter.reset(AvatarPose{});
+            AvatarPose upperBody;
+            upperBody.cameraDriven = upperBody.armsEnabled = true;
+            upperBody.bodyAngleX = 8;
+            upperBody.bodyAngleY = -6;
+            upperBody.bodyAngleZ = 5;
+            upperBody.arms = {{1, .8f, .9f, -.7f, 1, .8f},
+                              {.2f, .3f, .7f, .4f, 0, .6f}, .9f, 8, -6, 5};
+            fixed = {};
+            for (int sample = 0; sample < firstInterval; ++sample) {
+                adaptive = filter.update(upperBody, dt, .060f);
+                fixed = smoothAvatarPose(fixed, upperBody, dt, .060f);
+                check(adaptive.bodyAngleX >= 0 && adaptive.bodyAngleX <= 8 &&
+                          adaptive.bodyAngleY <= 0 && adaptive.bodyAngleY >= -6 &&
+                          adaptive.bodyAngleZ >= 0 && adaptive.bodyAngleZ <= 5 &&
+                          adaptive.arms.left.lift >= 0 && adaptive.arms.left.lift <= 1 &&
+                          adaptive.arms.left.wrist <= 0 && adaptive.arms.left.wrist >= -.7f &&
+                          adaptive.arms.right.wrist >= 0 && adaptive.arms.right.wrist <= .4f,
+                      "Body and independent arm/wrist channels must approach their targets without overshoot");
+                check(isClose(adaptive.arms.bodyAngleX, adaptive.bodyAngleX) &&
+                          isClose(adaptive.arms.bodyAngleY, adaptive.bodyAngleY) &&
+                          isClose(adaptive.arms.bodyAngleZ, adaptive.bodyAngleZ) &&
+                          adaptive.arms.left.confidence == .9f &&
+                          adaptive.arms.right.confidence == .7f &&
+                          adaptive.arms.left.handConfidence == .8f &&
+                          adaptive.arms.right.handConfidence == .6f,
+                      "Filtering must keep torso channels in sync and preserve measured arm confidence");
+            }
+            check(adaptive.bodyAngleX > fixed.bodyAngleX &&
+                      adaptive.bodyAngleY < fixed.bodyAngleY &&
+                      adaptive.bodyAngleZ > fixed.bodyAngleZ &&
+                      adaptive.arms.left.lift > fixed.arms.left.lift &&
+                      adaptive.arms.left.bend > fixed.arms.left.bend &&
+                      adaptive.arms.left.wrist < fixed.arms.left.wrist &&
+                      adaptive.arms.left.hand > fixed.arms.left.hand &&
+                      adaptive.arms.right.wrist > fixed.arms.right.wrist &&
+                      adaptive.arms.right.hand < fixed.arms.right.hand,
+                  "Fast torso, elbow, wrist and hand movement must respond faster than fixed smoothing");
+
+            // Reset after a gesture must remove velocity from every arm/body
+            // channel, including the final derivative slot used by right hand.
+            filter.reset(AvatarPose{});
+            const auto resetGesture = filter.update(upperBody, dt, .060f);
+            PoseSmoother fresh;
+            fresh.reset(AvatarPose{});
+            const auto freshGesture = fresh.update(upperBody, dt, .060f);
+            check(isClose(resetGesture.bodyAngleY, freshGesture.bodyAngleY) &&
+                      isClose(resetGesture.arms.left.lift, freshGesture.arms.left.lift) &&
+                      isClose(resetGesture.arms.left.wrist, freshGesture.arms.left.wrist) &&
+                      isClose(resetGesture.arms.right.hand, freshGesture.arms.right.hand),
+                  "Reset must clear adaptive velocity for torso and both arms through the last channel");
         }
 
         PoseSmoother filter;

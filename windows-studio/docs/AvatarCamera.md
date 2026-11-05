@@ -1,4 +1,4 @@
-# Avatar camera — Cortex Studio 0.10.0
+# Avatar camera — Cortex Studio 0.10.1
 
 ## العربية
 1. افتح Cortex Sender على الهاتف، وثبّت الكاميرا قرب مستوى العين واترك الوجه ظاهرًا بإضاءة واضحة.
@@ -7,6 +7,8 @@
 4. انظر مستقيمًا واضغط Set neutral face & position لتحديد اتجاه الرأس ومركز الشخصية. تتم معايرة أول وجه تلقائيًا أيضًا. استخدم Head rotation sensitivity لتقوية أو تخفيف الدوران، وMirror movement لعكس الاتجاه.
 5. اترك Follow face position مفعّلًا لتتحرك الشخصية مع انتقال وجهك داخل الكادر.
 6. Size & position يحدد الحجم والمكان الأساسيين؛ أزح رأسك يمينًا ويسارًا بعد المعايرة لاختبار الحركة.
+
+إصلاح 0.10.1 يفصل تحديث الجسم والذراعين عن توقيت نتائج الوجه. تستجيب المفاصل المرئية حتى لو تأخرت نتيجة الوجه أو خرج الوجه مؤقتًا من الكادر، ويعود الجزء غير المرئي تدريجيًا لوضع الراحة. لا يحتاج هذا الإصلاح تحديث تطبيق الهاتف؛ حدّث برنامج ويندوز وافتح CortexStudio.exe من الحزمة الجديدة. لا يكفي ظهور Arms 2/2 وحده للحكم على الحركة: راقب قيم رفع الذراع وثني المرفق أثناء تحريكهما، مع إظهار الكتفين والمرفقين والرسغين في صورة الكاميرا الأصلية.
 
 إصلاح 0.9.8 يعالج تعليق تحميل الشخصية وإغلاق البرنامج أثناء التحميل. يمكنك ضغط Cancel loading للرجوع إلى المعاينة وإعادة المحاولة. لا يحتاج هذا الإصلاح تحديث تطبيق أندرويد؛ تحميل الشخصية وتتبع الوجه يعملان على ويندوز. أول تحميل قد يستغرق عدة ثوانٍ لتجهيز مؤثرات الرسم.
 
@@ -20,6 +22,11 @@ Ren موديل أنمي ذكر ثنائي الأبعاد بوضعيات محدو
 
 ## English
 Connect Cortex Sender, enable Avatar, load a Live2D model, and select Camera tracking.
+Version 0.10.1 applies body samples independently of face sample timestamps, so
+visible arms and torso continue responding when face inference is delayed or
+temporarily loses the face. Unmeasured joints ease toward rest. This fix updates
+the Windows app; no Android update is needed. Check the original camera framing
+for visible shoulders, elbows and wrists, and watch the live lift/bend values.
 Version 0.9.8 fixes concurrent model loading/rendering and cancels pending loading
 when closing Studio. Use Cancel loading to return to the preview and retry. No
 Android update is required for this fix. The first load may take several seconds

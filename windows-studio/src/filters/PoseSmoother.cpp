@@ -6,12 +6,23 @@
 
 namespace cortex {
 namespace {
-constexpr std::array<float AvatarPose::*, 6> channels{
+constexpr std::array<float AvatarPose::*, 13> channels{
     &AvatarPose::yaw, &AvatarPose::pitch, &AvatarPose::roll,
-    &AvatarPose::positionX, &AvatarPose::positionY, &AvatarPose::depthScale};
+    &AvatarPose::positionX, &AvatarPose::positionY, &AvatarPose::depthScale,
+    &AvatarPose::bodyAngleX, &AvatarPose::bodyAngleY, &AvatarPose::bodyAngleZ,
+    &AvatarPose::gazeX, &AvatarPose::gazeY,
+    &AvatarPose::browLY, &AvatarPose::browRY};
 // The speed coefficient depends on signal units: degrees for angles, frame
 // fractions for position, and a neutral-relative ratio for distance.
-constexpr std::array<double, 6> speedCoefficient{.035, .035, .035, 14, 14, 14};
+constexpr std::array<double, 13> speedCoefficient{
+    .035, .035, .035, 14, 14, 14,
+    .080, .080, .080,
+    2.5, 2.5,
+    2.5, 2.5};
+
+constexpr std::array<float ArmPose::*, 4> armChannels{
+    &ArmPose::lift, &ArmPose::bend, &ArmPose::wrist, &ArmPose::hand};
+constexpr std::array<double, 4> armSpeedCoefficient{4.5, 4.5, 3.0, 3.0};
 
 void validate(const AvatarPose& pose) {
     for (float value : {pose.yaw, pose.pitch, pose.roll, pose.mouth, pose.eyeOpen,
@@ -21,6 +32,8 @@ void validate(const AvatarPose& pose) {
                        pose.positionX, pose.positionY, pose.depthScale,
                        pose.arms.left.lift, pose.arms.left.bend, pose.arms.left.confidence,
                        pose.arms.right.lift, pose.arms.right.bend, pose.arms.right.confidence,
+                       pose.arms.left.wrist, pose.arms.left.hand, pose.arms.left.handConfidence,
+                       pose.arms.right.wrist, pose.arms.right.hand, pose.arms.right.handConfidence,
                        pose.arms.confidence, pose.arms.bodyAngleX,
                        pose.arms.bodyAngleY, pose.arms.bodyAngleZ})
         if (!std::isfinite(value))
@@ -74,6 +87,27 @@ AvatarPose PoseSmoother::update(const AvatarPose& target, float dt, float respon
         const double alpha = -std::expm1(-twoPi * cutoff * dt);
         next.*member = static_cast<float>(previous + alpha * (value - previous));
     }
+    const auto filterArm = [&](const ArmPose& prevArm, const ArmPose& targetArm,
+                               ArmPose& nextArm, size_t baseIndex) {
+        for (size_t i = 0; i < armChannels.size(); ++i) {
+            const auto member = armChannels[i];
+            const double previous = prevArm.*member;
+            const double value = targetArm.*member;
+            const double speed = (value - previous) / dt;
+            const size_t dIdx = baseIndex + i;
+            derivative_[dIdx] += derivativeAlpha * (speed - derivative_[dIdx]);
+            const double cutoff = minimumCutoff + armSpeedCoefficient[i] *
+                                                     std::abs(derivative_[dIdx]);
+            const double alpha = -std::expm1(-twoPi * cutoff * dt);
+            nextArm.*member = static_cast<float>(previous + alpha * (value - previous));
+        }
+    };
+    filterArm(output_.arms.left, target.arms.left, next.arms.left, channels.size());
+    filterArm(output_.arms.right, target.arms.right, next.arms.right,
+              channels.size() + armChannels.size());
+    next.arms.bodyAngleX = next.bodyAngleX;
+    next.arms.bodyAngleY = next.bodyAngleY;
+    next.arms.bodyAngleZ = next.bodyAngleZ;
 
     const auto eyes = smoothAvatarPose(output_, target, dt, std::min(response, .020f));
     next.eyeOpen = eyes.eyeOpen;

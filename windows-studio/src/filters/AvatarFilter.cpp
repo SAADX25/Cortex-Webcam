@@ -92,7 +92,8 @@ AvatarPose smoothAvatarPose(const AvatarPose& previous, const AvatarPose& target
     result.cameraDriven = target.cameraDriven;
     result.armsEnabled = target.armsEnabled;
     const auto arm = [&](const ArmPose& a, const ArmPose& b) {
-        return ArmPose{blend(a.lift, b.lift), blend(a.bend, b.bend), b.confidence};
+        return ArmPose{blend(a.lift, b.lift), blend(a.bend, b.bend), b.confidence,
+                       blend(a.wrist, b.wrist), blend(a.hand, b.hand), b.handConfidence};
     };
     result.arms = {arm(previous.arms.left, target.arms.left),
                    arm(previous.arms.right, target.arms.right), target.arms.confidence,

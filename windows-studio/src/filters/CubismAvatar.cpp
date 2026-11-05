@@ -296,7 +296,13 @@ public:
     MappedParam bodyAngleX, bodyAngleY, bodyAngleZ;
     MappedParam armLA, armLB, armRA, armRB;
     MappedParam armL, armR;
+    MappedParam breath, eyeLSmile, eyeRSmile, browLAngle, browRAngle;
     MappedParam shoulderL, shoulderR, elbowL, elbowR, wristL, wristR;
+    MappedParam handL, handR;
+    MappedParam leftShoulderUp, rightShoulderUp, handLDrawOrder, handRDrawOrder;
+    MappedParam bodyAngleX2, bodyAngleY2, bodyCenter2, leftShoulderUp2, rightShoulderUp2;
+    std::array<float, 6> physInput_{};
+    bool physInputValid_{};
 
     ~Model() override {
         _motionManager->StopAllMotions();
@@ -334,12 +340,28 @@ public:
 
         armL.init(_model, {"ParamArmL", "PARAM_ARM_L", "paramArmL"});
         armR.init(_model, {"ParamArmR", "PARAM_ARM_R", "paramArmR"});
+        breath.init(_model, {"ParamBreath", "PARAM_BREATH"});
+        eyeLSmile.init(_model, {"ParamEyeLSmile"});
+        eyeRSmile.init(_model, {"ParamEyeRSmile"});
+        browLAngle.init(_model, {"ParamBrowLAngle"});
+        browRAngle.init(_model, {"ParamBrowRAngle"});
         shoulderL.init(_model, {"ParamArmL01"});
         shoulderR.init(_model, {"ParamArmR01"});
         elbowL.init(_model, {"ParamArmL02"});
         elbowR.init(_model, {"ParamArmR02"});
         wristL.init(_model, {"ParamArmL03"});
         wristR.init(_model, {"ParamArmR03"});
+        handL.init(_model, {"ParamHandL"});
+        handR.init(_model, {"ParamHandR"});
+        leftShoulderUp.init(_model, {"ParamLeftShoulderUp"});
+        rightShoulderUp.init(_model, {"ParamRightShoulderUp"});
+        handLDrawOrder.init(_model, {"ParamHandLDrawOrder"});
+        handRDrawOrder.init(_model, {"ParamHandRDrawOrder"});
+        bodyAngleX2.init(_model, {"ParamBodyAngleX2"});
+        bodyAngleY2.init(_model, {"ParamBodyAngleY2"});
+        bodyCenter2.init(_model, {"ParamBodyCenter2"});
+        leftShoulderUp2.init(_model, {"ParamLeftShoulderUp2"});
+        rightShoulderUp2.init(_model, {"ParamRightShoulderUp2"});
     }
 
     void update(float elapsed, const AvatarPose& pose, int motion, int expression) {
@@ -435,8 +457,11 @@ public:
                 } else {
                     const auto armRig = [&](const ArmPose& a, const MappedParam& arm,
                                              const MappedParam& shoulder, const MappedParam& elbow,
-                                             const MappedParam& wrist) {
-                        const bool measured = a.confidence >= .6f;
+                                             const MappedParam& wrist, const MappedParam& hand,
+                                             const MappedParam& shoulderUp,
+                                             const MappedParam& handDrawOrder) {
+                        const bool measured =
+                            a.confidence > 0.f || a.lift > .005f || a.bend > .005f;
                         const float lift = measured ? std::clamp(a.lift, 0.f, 1.f) : 0.f;
                         const float bend = measured ? std::clamp(a.bend, 0.f, 1.f) : 0.f;
                         if (shoulder.valid && elbow.valid) {
@@ -450,13 +475,32 @@ public:
                         } else {
                             arm.setBipolar(_model, lift);
                         }
-                        // No wrist orientation is measured by the current pose
-                        // contract. Leave its authored rest pose intact.
-                        if (wrist.valid)
-                            _model->SetParameterValue(wrist.index, wrist.defVal);
+                        if (shoulderUp.valid)
+                            shoulderUp.setBipolar(_model, lift * .5f);
+                        if (handDrawOrder.valid)
+                            handDrawOrder.setUnipolar(
+                                _model, (lift > .22f || bend > .30f) ? 1.f : 0.f);
+                        // Wrist bend and hand open/close come from the pose
+                        // model's pinky/index/thumb landmarks. Fall back to the
+                        // authored rest pose when the hand is not visible.
+                        const bool handMeasured = measured && a.handConfidence >= .35f;
+                        if (wrist.valid) {
+                            if (handMeasured)
+                                wrist.setBipolar(_model, a.wrist);
+                            else
+                                _model->SetParameterValue(wrist.index, wrist.defVal);
+                        }
+                        if (hand.valid) {
+                            if (handMeasured)
+                                hand.setBipolar(_model, a.hand * 2.f - 1.f);
+                            else
+                                _model->SetParameterValue(hand.index, hand.defVal);
+                        }
                     };
-                    armRig(pose.arms.left, armL, shoulderL, elbowL, wristL);
-                    armRig(pose.arms.right, armR, shoulderR, elbowR, wristR);
+                    armRig(pose.arms.left, armL, shoulderL, elbowL, wristL, handL,
+                           leftShoulderUp, handLDrawOrder);
+                    armRig(pose.arms.right, armR, shoulderR, elbowR, wristR, handR,
+                           rightShoulderUp, handRDrawOrder);
                 }
             } else {
                 // Arms disabled: keep natural resting arm pose
@@ -479,12 +523,32 @@ public:
                     _model->SetParameterValue(armRA.index, -1.0f);
                     _model->SetParameterValue(armRB.index, 0.0f);
                 } else {
-                    for (const auto* parameter : {&armL, &armR, &shoulderL, &shoulderR,
-                                                   &elbowL, &elbowR, &wristL, &wristR})
+                    for (const auto* parameter :
+                         {&armL, &armR, &shoulderL, &shoulderR, &elbowL, &elbowR, &wristL, &wristR,
+                          &handL, &handR, &leftShoulderUp, &rightShoulderUp,
+                          &handLDrawOrder, &handRDrawOrder})
                         if (parameter->valid)
                             _model->SetParameterValue(parameter->index, parameter->defVal);
                 }
             }
+        }
+
+        // Expression coupling: couple wide smiles to eye smile and brow height to brow angle
+        // without injecting artificial sine-wave oscillation when the user is still.
+        if (pose.cameraDriven) {
+            if (breath.valid)
+                _model->SetParameterValue(breath.index, breath.defVal);
+            const float smile = std::clamp((pose.mouthForm - .35f) / .65f, 0.f, 1.f);
+            const float lOpen = pose.leftEyeOpen < 0 ? pose.eyeOpen : pose.leftEyeOpen;
+            const float rOpen = pose.rightEyeOpen < 0 ? pose.eyeOpen : pose.rightEyeOpen;
+            eyeLSmile.setUnipolar(_model, smile * .8f * std::clamp(lOpen, 0.f, 1.f));
+            eyeRSmile.setUnipolar(_model, smile * .8f * std::clamp(rOpen, 0.f, 1.f));
+            browLAngle.setBipolar(_model, pose.browLY * .6f);
+            browRAngle.setBipolar(_model, pose.browRY * .6f);
+            for (const auto* sec : {&bodyAngleX2, &bodyAngleY2, &bodyCenter2,
+                                    &leftShoulderUp2, &rightShoulderUp2})
+                if (sec->valid)
+                    _model->SetParameterValue(sec->index, sec->defVal);
         }
 
         // 4. Save parameters
@@ -492,16 +556,16 @@ public:
 
         // Keep measured channels authoritative if a custom physics rig also
         // writes a tracked parameter. Hair and clothing keep their own outputs.
-        const std::array<const MappedParam*, 26> tracked{
+        const std::array<const MappedParam*, 32> tracked{
             &angleX, &angleY, &angleZ, &eyeLOpen, &eyeROpen, &eyeBallX, &eyeBallY,
             &browLY, &browRY, &mouthOpenY, &mouthForm, &bodyAngleX, &bodyAngleY,
             &bodyAngleZ, &armLA, &armLB, &armRA, &armRB, &armL, &armR,
-            &shoulderL, &shoulderR, &elbowL, &elbowR, &wristL, &wristR};
+            &shoulderL, &shoulderR, &elbowL, &elbowR, &wristL, &wristR, &handL, &handR,
+            &leftShoulderUp, &rightShoulderUp, &handLDrawOrder, &handRDrawOrder};
         std::array<float, tracked.size()> measured{};
-        const bool hasMeasuredBody = pose.armsEnabled && pose.arms.confidence > 0.f;
         if (pose.cameraDriven)
             for (size_t i = 0; i < tracked.size(); ++i)
-                if (tracked[i]->valid && (i < 11 || hasMeasuredBody))
+                if (tracked[i]->valid)
                     measured[i] = _model->GetParameterValue(tracked[i]->index);
 
         // 5. Apply pose and the model's authored hair/clothing physics. Start
@@ -513,13 +577,41 @@ public:
             if (!physicsInitialized || modeChanged) {
                 _physics->Stabilization(_model);
                 physicsInitialized = true;
+                physInputValid_ = false;
+            }
+            if (pose.cameraDriven) {
+                const std::array<const MappedParam*, 6> physDrivers{
+                    &angleX, &angleY, &angleZ, &bodyAngleX, &bodyAngleY, &bodyAngleZ};
+                const float dtClamped = std::clamp(elapsed, 0.f, .1f);
+                const float alpha = dtClamped > 0.f ? (1.f - std::exp(-dtClamped / .035f)) : 1.f;
+                for (size_t i = 0; i < physDrivers.size(); ++i) {
+                    if (!physDrivers[i]->valid)
+                        continue;
+                    const float targetVal = _model->GetParameterValue(physDrivers[i]->index);
+                    if (!physInputValid_)
+                        physInput_[i] = targetVal;
+                    else
+                        physInput_[i] += alpha * (targetVal - physInput_[i]);
+                    _model->SetParameterValue(physDrivers[i]->index, physInput_[i]);
+                }
+                physInputValid_ = true;
             }
             _physics->Evaluate(_model, elapsed);
         }
-        if (pose.cameraDriven)
+        if (pose.cameraDriven) {
             for (size_t i = 0; i < tracked.size(); ++i)
-                if (tracked[i]->valid && (i < 11 || hasMeasuredBody))
+                if (tracked[i]->valid)
                     _model->SetParameterValue(tracked[i]->index, measured[i]);
+            // Dampen secondary whole-body physics pendulums in camera-driven mode
+            // so head/gaze micro-movements do not make the entire torso/shoulders wobble.
+            for (const auto* sec : {&bodyAngleX2, &bodyAngleY2, &bodyCenter2,
+                                    &leftShoulderUp2, &rightShoulderUp2}) {
+                if (sec->valid) {
+                    const float v = _model->GetParameterValue(sec->index);
+                    _model->SetParameterValue(sec->index, sec->defVal + (v - sec->defVal) * .20f);
+                }
+            }
+        }
 
         // 6. Update model state
         _model->Update();
