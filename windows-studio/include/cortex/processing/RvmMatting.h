@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 namespace cortex {
 class RvmMatting {
 public:

@@ -1,6 +1,6 @@
 #pragma once
-#include "cortex/filters/AvatarFilter.h"
-#include "cortex/filters/HumanoidMotion.h"
+#include "cortex/avatar/AvatarFilter.h"
+#include "cortex/tracking/HumanoidMotion.h"
 #include <span>
 namespace cortex {
 // Called only on the inference worker. Coordinates are upright camera pixels.

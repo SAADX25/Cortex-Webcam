@@ -1,5 +1,5 @@
-#include "cortex/filters/RvmMatting.h"
-#include "GpuHelpers.h"
+#include "cortex/processing/RvmMatting.h"
+#include "gpu/GpuHelpers.h"
 #include <cstring>
 #ifdef CORTEX_HAS_DIRECTML
 #include <onnxruntime_cxx_api.h>

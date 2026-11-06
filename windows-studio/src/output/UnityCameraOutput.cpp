@@ -1,5 +1,5 @@
 #include "cortex/output/UnityCameraOutput.h"
-#include "../filters/GpuHelpers.h"
+#include "gpu/GpuHelpers.h"
 #include <array>
 #include <cstring>
 #include "shared.inl"

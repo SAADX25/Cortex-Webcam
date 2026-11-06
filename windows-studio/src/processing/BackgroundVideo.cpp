@@ -1,4 +1,4 @@
-#include "cortex/filters/BackgroundVideo.h"
+#include "cortex/processing/BackgroundVideo.h"
 #include "cortex/decoding/HardwareH264Decoder.h"
 extern "C" {
 #include <libavformat/avformat.h>

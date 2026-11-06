@@ -3,7 +3,7 @@ project(CortexStudio VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
-add_library(cortex_motion src/filters/HumanoidMotion.cpp src/filters/HandIdentityTracker.cpp)
+add_library(cortex_motion src/tracking/HumanoidMotion.cpp src/tracking/HandIdentityTracker.cpp)
 target_include_directories(cortex_motion PUBLIC include)
 add_library(cortex_rtp src/transport/H264RtpReceiver.cpp)
 target_include_directories(cortex_rtp PUBLIC include)
@@ -46,10 +46,17 @@ if(CORTEX_BUILD_RECEIVER)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS shaders/pipeline.hlsl)
     configure_file(shaders/ShaderSource.h.in generated/ShaderSource.generated.h @ONLY)
     add_library(cortex_processing
-        src/filters/HandTracker.cpp src/transport/MotionPublisher.cpp
-        src/filters/AvatarFilter.cpp src/filters/PoseSmoother.cpp src/filters/FaceTracker.cpp src/filters/HeadPose.cpp src/filters/BodyTracker.cpp src/filters/CubismAvatar.cpp src/filters/GpuColorConverter.cpp src/filters/GpuImageTransform.cpp src/filters/VideoProcessor.cpp
-        src/filters/RvmMatting.cpp src/filters/BackgroundVideo.cpp src/output/UnityCameraOutput.cpp)
-    target_include_directories(cortex_processing PUBLIC include PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated" third_party/unitycapture)
+        # Tracking: face, hands, body, head pose and smoothing
+        src/tracking/FaceTracker.cpp src/tracking/HandTracker.cpp src/tracking/BodyTracker.cpp
+        src/tracking/HeadPose.cpp src/tracking/PoseSmoother.cpp
+        # Avatar rendering (built-in + Live2D Cubism)
+        src/avatar/AvatarFilter.cpp src/avatar/CubismAvatar.cpp
+        # GPU video processing: color conversion, transforms, matting, backgrounds
+        src/processing/VideoProcessor.cpp src/processing/GpuColorConverter.cpp src/processing/GpuImageTransform.cpp
+        src/processing/RvmMatting.cpp src/processing/BackgroundVideo.cpp
+        # Outputs
+        src/transport/MotionPublisher.cpp src/output/UnityCameraOutput.cpp)
+    target_include_directories(cortex_processing PUBLIC include PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated" third_party/unitycapture)
     target_include_directories(cortex_processing SYSTEM PRIVATE "${FFMPEG_INCLUDE}")
     target_link_libraries(cortex_processing PUBLIC cortex_receiver PRIVATE d3dcompiler windowscodecs ole32 "${AVFORMAT_LIBRARY}" "${AVCODEC_LIBRARY}" "${AVUTIL_LIBRARY}")
     target_link_libraries(cortex_processing PUBLIC cortex_motion)

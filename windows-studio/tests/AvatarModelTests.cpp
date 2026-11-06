@@ -1,4 +1,4 @@
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 #include <algorithm>
 #include <cstring>
 #include <fstream>

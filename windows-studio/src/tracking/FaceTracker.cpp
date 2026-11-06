@@ -1,10 +1,10 @@
 // Copyright (c) 2019 Emiliana. OpenSeeFace decoding adapted under BSD-2-Clause.
 // See third_party/OpenSeeFace/LICENSE.
 // Model provenance and license are shipped in models/face-tracking.
-#include "cortex/filters/AvatarFilter.h"
-#include "GpuHelpers.h"
-#include "cortex/filters/HeadPose.h"
-#include "cortex/filters/BodyTracker.h"
+#include "cortex/avatar/AvatarFilter.h"
+#include "gpu/GpuHelpers.h"
+#include "cortex/tracking/HeadPose.h"
+#include "cortex/tracking/BodyTracker.h"
 #include "cortex/transport/MotionPublisher.h"
 #include <iostream>
 #include <sstream>

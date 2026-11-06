@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/AvatarFilter.h"
+#include "cortex/avatar/AvatarFilter.h"
 #include <array>
 namespace cortex {
 struct HeadPoseEstimate {

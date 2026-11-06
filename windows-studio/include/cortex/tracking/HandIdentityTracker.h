@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/HumanoidMotion.h"
+#include "cortex/tracking/HumanoidMotion.h"
 
 namespace cortex {
 // Assign both detections jointly; image X order is not anatomical hand identity.

@@ -34,6 +34,33 @@
 
 ---
 
+## Project Layout
+
+Open **`Cortex Webcam.code-workspace`** in VS Code to see each project and the libraries as separate roots, with build outputs and caches hidden.
+
+```text
+Cortex Webcam/
+├── android-sender/        Android app (Kotlin): capture, encoding, transport, discovery, ui
+├── windows-studio/        Windows Studio (C++20 + WPF)
+│   ├── include/cortex/    Public headers: core, gpu, transport, decoding, sources,
+│   │                      discovery, tracking, avatar, processing, output, ui
+│   ├── src/               Implementations (same folders as include/)
+│   ├── apps/              Console executables (cortex-receive, cortex-motion)
+│   ├── ui/                WPF desktop app (CortexStudio)
+│   ├── shaders/           HLSL
+│   ├── tests/             C++ tests + fixtures
+│   ├── scripts/           Build, packaging and dependency scripts
+│   ├── third_party/       Bundled libraries
+│   ├── .deps/             Downloaded libraries (git-ignored)
+│   └── patches/           Historical patches
+├── vrm-viewer/            Unity VRM avatar viewer
+├── assets/                Shared avatar assets (Live2D Ren)
+├── docs/                  Protocol and system docs
+└── dist/                  Release builds (git-ignored)
+```
+
+---
+
 ## Getting Started
 
 ### Android Sender Setup

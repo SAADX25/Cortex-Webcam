@@ -1,4 +1,4 @@
-#include "cortex/filters/HandIdentityTracker.h"
+#include "cortex/tracking/HandIdentityTracker.h"
 #include <algorithm>
 #include <cmath>
 

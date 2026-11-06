@@ -1,5 +1,5 @@
-#include "cortex/filters/AvatarFilter.h"
-#include "GpuHelpers.h"
+#include "cortex/avatar/AvatarFilter.h"
+#include "gpu/GpuHelpers.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>

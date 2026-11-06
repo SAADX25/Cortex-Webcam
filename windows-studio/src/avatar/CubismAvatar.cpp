@@ -1,9 +1,9 @@
-#include "cortex/filters/AvatarFilter.h"
+#include "cortex/avatar/AvatarFilter.h"
 #include <stdexcept>
 #include <iostream>
 
 #ifdef CORTEX_HAS_CUBISM
-#include "GpuHelpers.h"
+#include "gpu/GpuHelpers.h"
 #include "CubismShaderSource.generated.h"
 #include <CubismModelSettingJson.hpp>
 #include <ICubismAllocator.hpp>

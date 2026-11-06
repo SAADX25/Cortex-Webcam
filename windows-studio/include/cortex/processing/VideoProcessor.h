@@ -1,7 +1,7 @@
 #pragma once
 #include "cortex/sources/VideoSourceManager.h"
 #include <filesystem>
-#include "cortex/filters/AvatarFilter.h"
+#include "cortex/avatar/AvatarFilter.h"
 namespace cortex {
 struct GpuImage {
     ComPtr<ID3D11Texture2D> texture;

@@ -1,5 +1,5 @@
-#include "cortex/filters/GpuImageTransform.h"
-#include "GpuHelpers.h"
+#include "cortex/processing/GpuImageTransform.h"
+#include "gpu/GpuHelpers.h"
 namespace cortex {
 struct GpuImageTransform::Impl {
     std::shared_ptr<GpuDevice> gpu;

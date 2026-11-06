@@ -1,4 +1,4 @@
-#include "cortex/filters/PoseSmoother.h"
+#include "cortex/tracking/PoseSmoother.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>

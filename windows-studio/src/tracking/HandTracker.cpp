@@ -1,6 +1,6 @@
 // Independent implementation of OpenCV Zoo / MediaPipe Hands preprocessing.
 // Model/source provenance: third_party/MediaPipeHands/README.md (Apache-2.0).
-#include "cortex/filters/HandTracker.h"
+#include "cortex/tracking/HandTracker.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>

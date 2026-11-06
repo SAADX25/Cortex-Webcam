@@ -1,9 +1,9 @@
 // MediaPipe/OpenCV Zoo preprocessing and decoding: Apache-2.0.
 // See third_party/MediaPipePose/LICENSE and README.md for pinned model provenance.
-#include "cortex/filters/BodyTracker.h"
-#include "cortex/filters/HandVisibilityGate.h"
-#include "cortex/filters/HandTracker.h"
-#include "cortex/filters/HandIdentityTracker.h"
+#include "cortex/tracking/BodyTracker.h"
+#include "cortex/tracking/HandVisibilityGate.h"
+#include "cortex/tracking/HandTracker.h"
+#include "cortex/tracking/HandIdentityTracker.h"
 #include <algorithm>
 #include <array>
 #include <cmath>

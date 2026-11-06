@@ -1,6 +1,6 @@
-#include "cortex/filters/HumanoidMotion.h"
-#include "cortex/filters/HandIdentityTracker.h"
-#include "cortex/filters/HandVisibilityGate.h"
+#include "cortex/tracking/HumanoidMotion.h"
+#include "cortex/tracking/HandIdentityTracker.h"
+#include "cortex/tracking/HandVisibilityGate.h"
 #include <cmath>
 #include <iostream>
 #include <limits>

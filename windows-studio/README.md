@@ -39,9 +39,20 @@ include/cortex/
   decoding/HardwareH264Decoder.h     FFmpeg adapter; no FFmpeg types escape
   sources/IVideoSource.h             Common phone/USB source interface
   sources/VideoSourceManager.h       Source selection and PiP scene snapshots
-src/                               Implementations in matching layers
-apps/receiver_main.cpp              Diagnostic controller
-tests/                             RTP and manager tests
+  discovery/                         Phone auto-discovery and handshake
+  tracking/                          Face, hand, body tracking, head pose, smoothing
+  avatar/AvatarFilter.h              Avatar rendering (built-in + Live2D Cubism)
+  processing/                        GPU compositor, transforms, RVM matting, backgrounds
+  output/UnityCameraOutput.h         Virtual camera output
+  ui/StudioBridge.h                  Native API consumed by the WPF UI
+src/                               Implementations in matching layers (gpu/GpuHelpers.h is internal)
+apps/                              receiver_main.cpp / motion_main.cpp executables
+ui/                                WPF desktop app (CortexStudio) and layout tests
+shaders/                           HLSL pipeline and generated shader headers
+third_party/                       Bundled libraries (UnityCapture, MediaPipe, OpenSeeFace licenses)
+.deps/                             Downloaded libraries (FFmpeg, ONNX Runtime, Cubism, models) - git-ignored
+patches/                           Historical avatar patches
+tests/                             Unit and integration tests
 scripts/SmokeTest.ps1               Actual GPU loopback decode test
 docs/usb-source-contract.md         Next source adapter requirements
 ```

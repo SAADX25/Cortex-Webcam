@@ -1,7 +1,7 @@
-#include "cortex/filters/VideoProcessor.h"
-#include "cortex/filters/RvmMatting.h"
-#include "cortex/filters/PoseSmoother.h"
-#include "GpuHelpers.h"
+#include "cortex/processing/VideoProcessor.h"
+#include "cortex/processing/RvmMatting.h"
+#include "cortex/tracking/PoseSmoother.h"
+#include "gpu/GpuHelpers.h"
 #include <wincodec.h>
 #include <cmath>
 #include <sstream>

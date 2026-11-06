@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/HumanoidMotion.h"
+#include "cortex/tracking/HumanoidMotion.h"
 #include <memory>
 namespace cortex {
 class MotionPublisher {

@@ -1,8 +1,8 @@
 #include "cortex/ui/StudioBridge.h"
 #include "cortex/transport/UdpH264Source.h"
 #include "cortex/discovery/StudioDiscovery.h"
-#include "cortex/filters/VideoProcessor.h"
-#include "cortex/filters/BackgroundVideo.h"
+#include "cortex/processing/VideoProcessor.h"
+#include "cortex/processing/BackgroundVideo.h"
 #include "cortex/output/UnityCameraOutput.h"
 #include <dxgi1_3.h>
 #include <d3dcompiler.h>

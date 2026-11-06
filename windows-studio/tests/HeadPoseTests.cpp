@@ -1,4 +1,4 @@
-#include "cortex/filters/HeadPose.h"
+#include "cortex/tracking/HeadPose.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>

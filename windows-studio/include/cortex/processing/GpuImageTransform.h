@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 namespace cortex {
 // GPU-only RGBA rotation. Encoded NV12 buffers keep their original geometry.
 class GpuImageTransform {

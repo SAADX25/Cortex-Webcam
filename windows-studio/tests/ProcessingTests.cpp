@@ -1,7 +1,7 @@
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 #include "cortex/output/UnityCameraOutput.h"
-#include "cortex/filters/BackgroundVideo.h"
-#include "cortex/filters/GpuImageTransform.h"
+#include "cortex/processing/BackgroundVideo.h"
+#include "cortex/processing/GpuImageTransform.h"
 #include <iostream>
 #include <fstream>
 #include <atomic>

@@ -1,5 +1,5 @@
 #pragma once
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 #include "ShaderSource.generated.h"
 #include <d3dcompiler.h>
 #include <stdexcept>

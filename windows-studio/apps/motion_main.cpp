@@ -1,6 +1,6 @@
 #include "cortex/transport/UdpH264Source.h"
 #include "cortex/discovery/StudioDiscovery.h"
-#include "cortex/filters/AvatarFilter.h"
+#include "cortex/avatar/AvatarFilter.h"
 #include <windows.h>
 #include <atomic>
 #include <iostream>

@@ -1,7 +1,7 @@
-#include "cortex/filters/VideoProcessor.h"
+#include "cortex/processing/VideoProcessor.h"
 #include <wincodec.h>
-#include "cortex/filters/BodyTracker.h"
-#include "cortex/filters/HeadPose.h"
+#include "cortex/tracking/BodyTracker.h"
+#include "cortex/tracking/HeadPose.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>

@@ -1,0 +1,53 @@
+{
+	// Open this file (File > Open Workspace from File...) to get one clean root per project.
+	"folders": [
+		{ "name": "📱 Android Sender (Kotlin)", "path": "android-sender" },
+		{ "name": "🖥️ Windows Studio (C++ / WPF)", "path": "windows-studio" },
+		{ "name": "🧍 VRM Viewer (Unity)", "path": "vrm-viewer" },
+		{ "name": "🎨 Assets (Avatars)", "path": "assets" },
+		{ "name": "📚 Docs", "path": "docs" },
+		{ "name": "📦 Libraries - bundled (third_party)", "path": "windows-studio/third_party" },
+		{ "name": "📦 Libraries - downloaded (.deps)", "path": "windows-studio/.deps" },
+		{ "name": "🚀 Releases (dist)", "path": "dist" },
+		{ "name": "⚙️ Root (README, .gitignore)", "path": "." }
+	],
+	"settings": {
+		// Hide build outputs, caches and folders that already appear as their own root.
+		"files.exclude": {
+			"**/.git": true,
+			// Build outputs (patterns are relative to each project root)
+			"build": true,
+			"build-*": true,
+			"app/build": true,
+			"ui/*/bin": true,
+			"ui/*/obj": true,
+			"Tests/bin": true,
+			"Tests/obj": true,
+			// Android / Gradle caches
+			".gradle": true,
+			".gradle-user": true,
+			".android": true,
+			".kotlin": true,
+			// Unity generated folders and meta files
+			"Library": true,
+			"Logs": true,
+			"Temp": true,
+			"UserSettings": true,
+			"**/*.meta": true,
+			// Libraries are shown as their own roots
+			".deps": true,
+			"third_party": true,
+			"android-sender": true,
+			"windows-studio": true,
+			"vrm-viewer": true,
+			"assets": true,
+			"docs": true,
+			"dist": true
+		},
+		"search.exclude": {
+			"**/.deps": true,
+			"**/dist": true
+		},
+		"explorer.sortOrder": "type"
+	}
+}

@@ -1,5 +1,5 @@
 // OpenSeeFace reference contour: Copyright (c) 2019 Emiliana, BSD-2-Clause.
-#include "cortex/filters/HeadPose.h"
+#include "cortex/tracking/HeadPose.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
