@@ -1,0 +1,7 @@
+{
+  "source": "https://github.com/vrm-c/UniVRM/blob/v0.131.4/Tests/Models/Alicia_vrm-0.51/AliciaSolid_vrm-0.51.vrm",
+  "sha256": "237bb02efadf8c13a114af91dd8e860173081457dee87017e51011c448d05dc2",
+  "title": "Alicia Solid", "author": "© DWANGO Co., Ltd.",
+  "terms": "https://3d.nicovideo.jp/alicia/rule.html",
+  "usage": "Official UniVRM test fixture, downloaded for local testing at the user's request. Model rights are separate from UniVRM's MIT code license. Embedded VRM metadata includes usage restrictions."
+}

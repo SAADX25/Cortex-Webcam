@@ -6,6 +6,7 @@
 #include <stop_token>
 
 namespace cortex {
+struct HumanoidLandmarks;
 // Position offsets are fractions of the output frame; positive Y moves down.
 struct AvatarFraming {
     float scale{1}, x{}, y{};
@@ -25,6 +26,7 @@ struct UpperBodyPose {
     float bodyAngleX{}, bodyAngleY{}, bodyAngleZ{};
     // Body inference runs independently of face inference; use its own sample clock.
     std::chrono::steady_clock::time_point capturedAt;
+    std::shared_ptr<const HumanoidLandmarks> landmarks3D;
 };
 struct AvatarPose {
     float yaw{}, pitch{}, roll{}, mouth{}, eyeOpen{1}, gazeX{}, gazeY{};

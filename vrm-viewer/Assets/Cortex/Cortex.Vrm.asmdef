@@ -1,0 +1,6 @@
+{
+  "name": "Cortex.Vrm",
+  "rootNamespace": "Cortex.Vrm",
+  "references": ["VRM10", "UniGLTF", "UniGLTF.Utils", "UniHumanoid"],
+  "autoReferenced": true
+}

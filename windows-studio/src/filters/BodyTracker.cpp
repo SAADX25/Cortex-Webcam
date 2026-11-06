@@ -1,6 +1,9 @@
 // MediaPipe/OpenCV Zoo preprocessing and decoding: Apache-2.0.
 // See third_party/MediaPipePose/LICENSE and README.md for pinned model provenance.
 #include "cortex/filters/BodyTracker.h"
+#include "cortex/filters/HandVisibilityGate.h"
+#include "cortex/filters/HandTracker.h"
+#include "cortex/filters/HandIdentityTracker.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -51,6 +54,39 @@ void mapHand(ArmPose& arm, LandmarkPoint elbow, LandmarkPoint wrist, LandmarkPoi
     const float openSpread = std::clamp((spread - .12f) / (.30f - .12f), 0.f, 1.f);
     arm.hand = std::clamp(.6f * openReach + .4f * openSpread, 0.f, 1.f);
     arm.handConfidence = std::clamp(confidence, 0.f, 1.f);
+}
+void mapHand21(ArmPose& arm, LandmarkPoint elbow, const HandLandmarks& hand) {
+    if (arm.confidence <= 0 || !std::isfinite(hand.confidence) || hand.confidence < .6f)
+        return;
+    const auto dist3 = [](Joint3D a, Joint3D b) {
+        return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) +
+                         (a.z - b.z) * (a.z - b.z));
+    };
+    const float palmLen = dist3(hand.world[0], hand.world[9]);
+    if (!std::isfinite(palmLen) || palmLen < 1e-3f)
+        return;
+    // Measure average finger extension across all 5 fingers (tips 4, 8, 12, 16, 20)
+    // relative to the palm length (wrist 0 -> middle MCP 9) plus finger splay.
+    float extension = 0.f;
+    for (int tip : {4, 8, 12, 16, 20})
+        extension += dist3(hand.world[0], hand.world[tip]) / palmLen;
+    extension *= 0.2f;
+    const float splay = (dist3(hand.world[8], hand.world[20]) +
+                         dist3(hand.world[4], hand.world[8])) / palmLen;
+    const float openExt = std::clamp((extension - 1.05f) / (1.80f - 1.05f), 0.f, 1.f);
+    const float openSplay = std::clamp((splay - 0.55f) / (1.35f - 0.55f), 0.f, 1.f);
+    arm.hand = std::clamp(0.75f * openExt + 0.25f * openSplay, 0.f, 1.f);
+    arm.handConfidence = std::clamp(hand.confidence, 0.f, 1.f);
+    // Refine 2D wrist bend using the 21-point wrist (0) -> middle MCP (9) vector.
+    const float fx = hand.image[0].x - elbow.x, fy = hand.image[0].y - elbow.y;
+    const float forearm = std::hypot(fx, fy);
+    const float hx = hand.image[9].x - hand.image[0].x, hy = hand.image[9].y - hand.image[0].y;
+    const float handLen = std::hypot(hx, hy);
+    if (std::isfinite(forearm) && std::isfinite(handLen) && forearm >= 5.f && handLen >= 2.f) {
+        const float cross = fx * hy - fy * hx, dot = fx * hx + fy * hy;
+        arm.wrist =
+            std::clamp(std::atan2(cross, dot) / (std::numbers::pi_v<float> * .5f), -1.f, 1.f);
+    }
 }
 BodyAngles mapBodyAngles(LandmarkPoint leftShoulder, LandmarkPoint rightShoulder,
                          float leftShoulderZ, float rightShoulderZ,
@@ -139,6 +175,9 @@ std::vector<Ort::Value> run(Ort::Session& s, const std::vector<float>& input,
 }
 }  // namespace
 struct BodyTracker::Impl {
+    HandIdentityTracker handIdentity;
+    HandVisibilityGate handVisibility;
+    std::unique_ptr<HandTracker> hands;
     Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "cortex-arms"};
     Ort::Session detector{nullptr}, pose{nullptr};
     std::vector<Vec> anchor = anchors();
@@ -160,9 +199,44 @@ BodyTracker::BodyTracker(const std::filesystem::path& directory)
         impl_->env, (directory / "person_detection_mediapipe_2023mar.onnx").c_str(), options);
     impl_->pose = Ort::Session(
         impl_->env, (directory / "pose_estimation_mediapipe_2023mar.onnx").c_str(), options);
+    const auto handDirectory = directory.parent_path() / "hands";
+    if (std::filesystem::is_regular_file(handDirectory / "handpose_estimation_mediapipe_2023feb.onnx") &&
+        std::filesystem::is_regular_file(handDirectory / "palm_detection_mediapipe_2023feb.onnx"))
+        impl_->hands = std::make_unique<HandTracker>(handDirectory);
 }
 BodyTracker::~BodyTracker() = default;
+void BodyTracker::reset() noexcept { impl_->hasRoi = false; impl_->handIdentity.reset(); impl_->handVisibility.reset(); }
 UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, unsigned h) {
+    auto body = trackBody(image, w, h);
+    auto raw = body.landmarks3D ? std::make_shared<HumanoidLandmarks>(*body.landmarks3D)
+                               : std::make_shared<HumanoidLandmarks>();
+    if (impl_->hands) {
+        raw->handsAvailable = true;
+        auto hands = impl_->hands->track(image, w, h);
+        raw->hands = impl_->handIdentity.update(hands, raw->bodyImage, w, h, std::chrono::steady_clock::now());
+        impl_->handVisibility.update(raw->hands,w,h,std::chrono::steady_clock::now());
+        if (raw->hands[0].confidence >= .8f && raw->bodyImage[13].confidence >= .5f)
+            mapHand21(body.left, {raw->bodyImage[13].x, raw->bodyImage[13].y}, raw->hands[0]);
+        if (raw->hands[1].confidence >= .8f && raw->bodyImage[14].confidence >= .5f)
+            mapHand21(body.right, {raw->bodyImage[14].x, raw->bodyImage[14].y}, raw->hands[1]);
+    }
+    const auto setHandFallback = [&](int side, const ArmPose& arm) {
+        if (arm.handConfidence > 0.f) {
+            raw->handOpen[side] = arm.hand;
+            raw->handOpenConfidence[side] = arm.handConfidence;
+            raw->wristBend[side] = arm.wrist;
+            raw->wristConfidence[side] = arm.handConfidence;
+        } else if (arm.confidence >= .5f) {
+            raw->handOpen[side] = .72f;
+            raw->handOpenConfidence[side] = arm.confidence * .8f;
+        }
+    };
+    setHandFallback(0, body.left);
+    setHandFallback(1, body.right);
+    body.landmarks3D = std::move(raw);
+    return body;
+}
+UpperBodyPose BodyTracker::trackBody(std::span<const uint8_t> image, unsigned w, unsigned h) {
     if (!w || !h || image.size() != size_t(w) * h * 4)
         throw std::invalid_argument("Invalid body tracking image");
     auto& s = *impl_;
@@ -219,10 +293,16 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
         s.hasRoi = false;
         return {};
     }
-    // Enlarge the crop slightly so raised elbows and wrists remain inside the 256x256 ROI,
+    //Enlarge the crop slightly so raised elbows and wrists remain inside the 256x256 ROI,
     // and low-pass filter the detector ROI across frames to prevent crop-induced landmark jitter.
     const float rawRadius = rawDist * 1.15f;
-    const Vec rawUp{(rawFull.x - rawHip.x) / rawDist, (rawFull.y - rawHip.y) / rawDist};
+    Vec rawUp{(rawFull.x - rawHip.x) / rawDist, (rawFull.y - rawHip.y) / rawDist};
+    // In upper-body framing when hips are below the frame, person detection's hip->full-body
+    // vector can swing sideways toward a raised arm. Clamp crop roll within ±30° of upright (0, -1).
+    if (rawUp.y > -0.866f) {
+        rawUp.x = std::clamp(rawUp.x, -0.5f, 0.5f);
+        rawUp.y = -std::sqrt(std::max(0.f, 1.f - rawUp.x * rawUp.x));
+    }
     if (!s.hasRoi ||
         std::hypot(rawHip.x - s.smoothHip.x, rawHip.y - s.smoothHip.y) > rawRadius * 0.5f ||
         std::abs(rawRadius - s.smoothRadius) > rawRadius * 0.4f) {
@@ -262,11 +342,14 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
         }
     auto pose = run(s.pose, s.input, poseShape);
     const float* landmarks = nullptr;
+    const float* world = nullptr;
     float presence = 0;
     for (auto& out : pose) {
         const auto shape = out.GetTensorTypeAndShapeInfo().GetShape();
         if (shape == std::vector<int64_t>{1, 195})
             landmarks = out.GetTensorData<float>();
+        if (shape == std::vector<int64_t>{1, 117})
+            world = out.GetTensorData<float>();
         if (shape == std::vector<int64_t>{1, 1})
             presence = out.GetTensorData<float>()[0];
     }
@@ -286,10 +369,13 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
         const float pres = sigmoid(landmarks[i * 5 + 4]);
         visibility[i] = (i >= 13 && i <= 22) ? (vis * (0.35f + 0.65f * pres))
                                              : std::min(vis, pres);
+        const float maxY = (i >= 23) ? float(h) * 0.98f : float(h) + marginY;
         if (!std::isfinite(points[i].x) || !std::isfinite(points[i].y) ||
             points[i].x < -marginX || points[i].x >= w + marginX ||
-            points[i].y < -marginY || points[i].y >= h + marginY)
+            points[i].y < -marginY || points[i].y >= maxY)
             visibility[i] = 0;
+        if(i>=15 && i<=22 && (points[i].x<0 || points[i].x>=w || points[i].y<0 || points[i].y>=h))
+            visibility[i]=0;
     }
     const float shoulderConfidence = std::min(visibility[11], visibility[12]);
     if (!std::isfinite(shoulderConfidence) || shoulderConfidence < .55f)
@@ -335,8 +421,17 @@ UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, uns
     };
     hand(leftArm, 13, 15, 17, 19, 21);
     hand(rightArm, 14, 16, 18, 20, 22);
-    return {leftArm, rightArm, std::max(.61f, presence * shoulderConfidence),
+    UpperBodyPose result{leftArm, rightArm, std::max(.61f, presence * shoulderConfidence),
             angles.angleX, angles.angleY, angles.angleZ};
+    auto raw = std::make_shared<HumanoidLandmarks>();
+    for (size_t i = 0; i < 33; ++i)
+        raw->bodyImage[i] = {points[i].x, points[i].y, landmarks[i*5+2] * (2*radius/p), visibility[i]};
+    if (world)
+        for (size_t i = 0; i < 33; ++i)
+            raw->body[i] = {right.x * world[i*3] - up.x * world[i*3+1],
+                -(right.y * world[i*3] - up.y * world[i*3+1]), -world[i*3+2], visibility[i]};
+    result.landmarks3D = std::move(raw);
+    return result;
 }
 #else
 struct BodyTracker::Impl {};
@@ -344,6 +439,7 @@ BodyTracker::BodyTracker(const std::filesystem::path&) {
     throw std::runtime_error("Body tracking requires ONNX Runtime");
 }
 BodyTracker::~BodyTracker() = default;
+void BodyTracker::reset() noexcept {}
 UpperBodyPose BodyTracker::track(std::span<const uint8_t>, unsigned, unsigned) {
     return {};
 }

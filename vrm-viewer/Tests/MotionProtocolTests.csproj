@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../Assets/Cortex/MotionPacket.cs" Link="MotionPacket.cs" />
+    <Compile Include="../Assets/Cortex/BoneTrackingState.cs" Link="BoneTrackingState.cs" />
+  </ItemGroup>
+</Project>
