@@ -5,16 +5,12 @@
 #include "gpu/GpuHelpers.h"
 #include "cortex/tracking/HeadPose.h"
 #include "cortex/tracking/BodyTracker.h"
-#include "cortex/transport/MotionPublisher.h"
-#include <iostream>
-#include <sstream>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
-#include <limits>
 #include <mutex>
 #include <thread>
 #ifdef CORTEX_HAS_DIRECTML
@@ -76,9 +72,6 @@ class OnnxFaceTracker final : public FaceTracker {
     UpperBodyPose body_;
     Clock::time_point bodyTime_{};
     std::string bodyStatus_;
-    std::unique_ptr<MotionPublisher> motionPublisher_;
-    HumanoidMotionSolver motionSolver_; // Accessed only while mutex_ is held.
-    Clock::time_point lastMotionPublish_{};
     Clock::time_point lastSubmit_{};
     Clock::time_point nextBodySubmit_{};
     int64_t lastTimestamp_{INT64_MIN};
@@ -310,47 +303,8 @@ class OnnxFaceTracker final : public FaceTracker {
         b.height = std::max(0.f, bottom - b.y);
         return b;
     }
-    void applyFaceToLandmarks(HumanoidLandmarks& raw) {
-        if (!result_.landmarks || Clock::now() - result_.captured > std::chrono::milliseconds(350))
-            return;
-        const auto& f = *result_.landmarks;
-        raw.hasFace = true;
-        // Face expressions may be ready before a valid perspective head fit.
-        // Do not publish an invented zero-angle head as a neutral observation.
-        raw.headYaw=raw.headPitch=raw.headRoll=std::numeric_limits<float>::quiet_NaN();
-        if (f.headRotation) {
-            raw.headYaw = std::clamp(f.headRotation->yaw, -45.f, 45.f);
-            // Send the physical angle. The VRM receiver establishes a stable
-            // neutral pose; a single startup frame is not a reliable baseline.
-            raw.headPitch = std::clamp(f.headRotation->pitch, -60.f, 60.f);
-            raw.headRoll = std::clamp(f.headRotation->roll, -35.f, 35.f);
-        }
-        raw.leftEyeOpen = f.leftEyeOpen < 0 ? f.eyeOpen : f.leftEyeOpen;
-        raw.faceEyesImage = {Joint3D{f.leftEye.x, f.leftEye.y, 0, 1}, Joint3D{f.rightEye.x, f.rightEye.y, 0, 1}};
-        raw.rightEyeOpen = f.rightEyeOpen < 0 ? f.eyeOpen : f.rightEyeOpen;
-        raw.mouthOpen = f.mouthOpenY;
-        raw.mouthSmile = f.mouthForm;
-        raw.brow = (f.browLY + f.browRY) * 0.5f;
-        raw.gazeX = f.gazeX;
-        raw.gazeY = f.gazeY;
-        raw.bodySwayX = f.hasHeadPosition ? f.headPositionX : 0.f;
-    }
     void workBody(const std::filesystem::path& directory) noexcept {
         std::unique_ptr<BodyTracker> tracker;
-        wchar_t portText[16]{};
-        uint16_t motionPort{};
-        if (GetEnvironmentVariableW(L"CORTEX_VRM_PORT", portText, 16)) {
-            wchar_t* end{}; auto port = std::wcstoul(portText, &end, 10);
-            if (end != portText && *end == 0 && port > 0 && port <= 65535) {
-                motionPort = static_cast<uint16_t>(port);
-                std::lock_guard lock(mutex_);
-                if (!motionPublisher_)
-                    motionPublisher_ = std::make_unique<MotionPublisher>(motionPort);
-            }
-        }
-        wchar_t diagnosticsText[8]{};
-        const bool diagnostics = GetEnvironmentVariableW(L"CORTEX_HAND_DIAGNOSTICS", diagnosticsText, 8) && diagnosticsText[0] == L'1';
-        Clock::time_point lastDiagnostics{};
         Clock::time_point retry{};
         ArmPose prevLeft{}, prevRight{};
         Clock::time_point prevLeftTime{}, prevRightTime{};
@@ -383,11 +337,6 @@ class OnnxFaceTracker final : public FaceTracker {
                 if (!tracker)
                     continue;
                 auto body = tracker->track(image.rgba, image.width, image.height);
-                if (body.landmarks3D) {
-                    auto raw = std::make_shared<HumanoidLandmarks>(*body.landmarks3D);
-                    raw->capturedAt = image.captured;
-                    body.landmarks3D = std::move(raw);
-                }
                 // Hold the last valid arm pose briefly across 1-2 frame dropouts during fast motion
                 if (body.left.confidence >= .6f) {
                     prevLeft = body.left;
@@ -415,35 +364,9 @@ class OnnxFaceTracker final : public FaceTracker {
                                      (body.right.confidence >= .6f ? 1 : 0);
                     bodyStatus_ = "Arms " + std::to_string(arms) +
                                   (arms == 2 ? "/2 visible" : "/2 - show elbows/wrists");
-                    if (body.landmarks3D) {
-                        const auto& raw = *body.landmarks3D;
-                        const int hands = (raw.hands[0].confidence >= .8f ? 1 : 0) +
-                                          (raw.hands[1].confidence >= .8f ? 1 : 0);
-                        bodyStatus_ += raw.handsAvailable ? " | Hands " + std::to_string(hands) + "/2 (21 joints)"
-                                                         : " | Hands models not installed";
-                        if (motionPort) {
-                            if (!motionPublisher_) motionPublisher_ = std::make_unique<MotionPublisher>(motionPort);
-                            HumanoidLandmarks merged = raw;
-                            applyFaceToLandmarks(merged);
-                            lastMotionPublish_ = Clock::now();
-                            if (!motionPublisher_->publish(motionSolver_.solve(merged)))
-                                bodyStatus_ += " | Motion UDP send failed";
-                        }
-                        if (diagnostics && (raw.hands[0].confidence>=.8f || raw.hands[1].confidence>=.8f) &&
-                            Clock::now() - lastDiagnostics >= std::chrono::milliseconds(100)) {
-                            lastDiagnostics = Clock::now();
-                            std::ostringstream line;
-                            line << "HAND_SAMPLE capture_us=" << std::chrono::duration_cast<std::chrono::microseconds>(image.captured.time_since_epoch()).count();
-                            for (int side = 0; side < 2; ++side)
-                                if (raw.hands[side].confidence >= .8f)
-                                    for (size_t joint = 0; joint < 21; ++joint) {
-                                        const auto& p = raw.hands[side].world[joint];
-                                        line << ' ' << (side ? 'R' : 'L') << joint << '=' << p.x << ',' << p.y << ',' << p.z;
-                                    }
-                            std::cout << line.str() << std::endl;
-                            OutputDebugStringA((line.str() + "\n").c_str());
-                        }
-                    }
+                    bodyStatus_ += body.visibleHands
+                        ? " | Hands " + std::to_string(*body.visibleHands) + "/2 (21 joints)"
+                        : " | Hands models not installed";
                 }
             } catch (const std::exception&) {
                 std::lock_guard lock(mutex_);
@@ -771,17 +694,6 @@ class OnnxFaceTracker final : public FaceTracker {
                         if (found)
                             status_ += std::string(qualityModel ? " | Quality tracking" : " | Fast tracking") +
                                        (gazeModel ? " | Pupil gaze" : " | Gaze unavailable");
-                        if (found && bodyEnabled_ && motionPublisher_ &&
-                            Clock::now() - lastMotionPublish_ >= std::chrono::milliseconds(22)) {
-                            HumanoidLandmarks merged =
-                                (body_.landmarks3D && Clock::now() - bodyTime_ <= std::chrono::milliseconds(350))
-                                    ? *body_.landmarks3D
-                                    : HumanoidLandmarks{};
-                            merged.capturedAt = image.captured;
-                            applyFaceToLandmarks(merged);
-                            lastMotionPublish_ = Clock::now();
-                            motionPublisher_->publish(motionSolver_.solve(merged));
-                        }
                     }
                 }
             }
@@ -821,7 +733,6 @@ public:
             frame.sourceTimestamp90k < lastTimestamp_) {
             std::lock_guard lock(mutex_);
             ++inputGeneration_;
-            motionSolver_.reset();
             result_ = {};
             pending_.reset();
             pendingBody_.reset();
@@ -873,7 +784,6 @@ public:
             return;
         std::lock_guard lock(mutex_);
         ++bodyGeneration_;
-        motionSolver_.reset();
         pendingBody_.reset();
         body_ = {};
         bodyTime_ = {};

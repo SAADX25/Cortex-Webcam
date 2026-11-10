@@ -1,6 +1,6 @@
 #pragma once
 #include "cortex/avatar/AvatarFilter.h"
-#include "cortex/tracking/HumanoidMotion.h"
+#include "cortex/tracking/HandTracker.h"
 #include <span>
 namespace cortex {
 // Called only on the inference worker. Coordinates are upright camera pixels.
@@ -14,7 +14,8 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-    UpperBodyPose trackBody(std::span<const uint8_t>, unsigned, unsigned);
+    UpperBodyPose trackBody(std::span<const uint8_t>, unsigned, unsigned,
+                            std::array<Joint3D, 33>& imageJoints);
 };
 // Stable arm geometry shared by model inference and unit tests.
 ArmPose mapArm(LandmarkPoint shoulder, LandmarkPoint elbow, LandmarkPoint wrist, float confidence);

@@ -3,7 +3,6 @@
 	"folders": [
 		{ "name": "📱 Android Sender (Kotlin)", "path": "android-sender" },
 		{ "name": "🖥️ Windows Studio (C++ / WPF)", "path": "windows-studio" },
-		{ "name": "🧍 VRM Viewer (Unity)", "path": "vrm-viewer" },
 		{ "name": "🎨 Assets (Avatars)", "path": "assets" },
 		{ "name": "📚 Docs", "path": "docs" },
 		{ "name": "📦 Libraries - bundled (third_party)", "path": "windows-studio/third_party" },
@@ -28,18 +27,11 @@
 			".gradle-user": true,
 			".android": true,
 			".kotlin": true,
-			// Unity generated folders and meta files
-			"Library": true,
-			"Logs": true,
-			"Temp": true,
-			"UserSettings": true,
-			"**/*.meta": true,
 			// Libraries are shown as their own roots
 			".deps": true,
 			"third_party": true,
 			"android-sender": true,
 			"windows-studio": true,
-			"vrm-viewer": true,
 			"assets": true,
 			"docs": true,
 			"dist": true

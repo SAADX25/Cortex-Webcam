@@ -1,6 +1,6 @@
 # Cortex Avatar System
 
-The Avatar system allows Cortex Studio to replace the camera feed with either an asset-free, GPU-rendered procedural avatar or a Live2D Cubism model, driven by either an animated test pose or real-time camera face tracking.
+Cortex Studio can replace the camera feed with a Live2D Cubism model driven by camera face tracking or demo animation.
 
 ## Architecture
 
@@ -19,11 +19,10 @@ The Avatar system allows Cortex Studio to replace the camera feed with either an
 │  [Avatar Enabled]                                      │
 │     Motion Input:                                      │
 │       • Test Motion ──► AvatarFilter::testPose()       │
-│       • Face Tracking ──► BuiltinFaceTracker::track()  │
+│       • Face Tracking ──► FaceTracker::track()         │
 │                                                        │
 │     Rendering Path:                                    │
-│       • Mode 0 (Test): AvatarFilter (HLSL GPU Shader)  │
-│       • Mode 1 (Cubism): Live2D Cubism D3D11 Model     │
+│       • Live2D Cubism D3D11 Model                     │
 └────────────────────────────┬───────────────────────────┘
                              │
                              ▼
@@ -41,13 +40,7 @@ The Avatar system allows Cortex Studio to replace the camera feed with either an
 
 ## Key Components
 
-### 1. `AvatarFilter` (Built-in GPU Procedural Avatar)
-- **Shader-based**: Rendered entirely through DirectX 11 via the `AvatarPreview` pixel shader in `pipeline.hlsl`.
-- **Zero Assets Required**: Operates without any external files, model packages, or network assets.
-- **Dynamic Features**: Draws an anti-aliased elliptical head, eye sockets, pupils tracking horizontal and vertical gaze, and an animated mouth opening/closing based on pose parameters.
-- **Isotropic Coordinates**: Automatically adapts to portrait or landscape orientations without distortion.
-
-### 2. Live2D Cubism Integration (`CubismAvatar`)
+### 1. Live2D Cubism Integration (`CubismAvatar`)
 - **Native SDK Hook**: Integrates with the Live2D Cubism Native SDK when compiled with `CORTEX_HAS_CUBISM` via CMake (`-DCUBISM_SDK_ROOT=...`).
 - **Parameter Mapping**: Automatically translates `AvatarPose` properties into standard Cubism parameter IDs:
   - `yaw` → `ParamAngleX`
@@ -56,9 +49,9 @@ The Avatar system allows Cortex Studio to replace the camera feed with either an
   - `eyeOpen` → `ParamEyeLOpen` & `ParamEyeROpen`
   - `gazeX` / `gazeY` → `ParamEyeBallX` & `ParamEyeBallY`
   - `mouth` → `ParamMouthOpenY`
-- **Graceful Fallback**: When the Cubism SDK is not compiled in or no model file is loaded, the pipeline falls back to the built-in GPU test avatar with an informative status banner.
+- **Loading**: The camera preview displays an indeterminate progress bar while the model is prepared. The scene keeps its background and any current model during the load.
 
-### 3. Motion Sources
+### 2. Motion Sources
 - **Procedural Test Animation**: Generates continuous trigonometric cycles (sine/cosine waves) simulating natural head sway, breathing, blinking, and mouth movements. Allows verifying the rendering and virtual camera pipelines without a physical camera or phone connected.
 - **Camera Tracking**: The packaged ONNX tracker analyzes reduced-size upright camera frames with OpenSeeFace face/pupil models and MediaPipe upper-body models. Face and body inference run on separate workers. Perspective head fitting and speed-adaptive smoothing drive `AvatarPose`; the built-in tracker remains a fallback when ONNX support is unavailable.
 
@@ -73,21 +66,16 @@ measurements. Disabling body tracking clears its sample/filter state immediately
 Torso confidence is preserved even when elbows or wrists are outside the frame.
 These changes run entirely on Windows and require no Android sender update.
 
-### 4. Seamless Mode Transitions
+### 3. Mode Transitions
 - **Instant Camera Restoration**: Disabling Avatar mode immediately restores the original video feed, background video/image compositing, and chroma key / AI matting without requiring a stream restart.
 - **Virtual Camera Output**: Works transparently with the UnityCapture virtual camera driver (`UnityCameraOutput`), streaming avatar visuals to Discord, OBS, Zoom, or Google Meet.
 
 ## UI Controls
 
 In Cortex Studio's **Avatar** tab:
-1. **Use test avatar** (`AvatarEnabled`): Toggles avatar mode on/off.
-2. **Character Model Selection**:
-   - **GPU Test Avatar**: Built-in procedural rendering.
-   - **Live2D Cubism**: External model loading with file browser (`.moc3`, `.model3.json`).
+1. **Enable avatar** activates Live2D and loads the bundled Ren model if no model is selected.
+2. **Choose Live2D model** opens a `.moc3` or `.model3.json` file.
 3. **Motion Source**:
    - **Animate test pose** (`AvatarMotion`): When checked, runs procedural sine loop. When unchecked, camera face tracking drives movement.
-4. **Monitor HUD**:
-   - Cyan badge `TEST AVATAR` for procedural GPU mode.
-   - Purple badge `LIVE2D AVATAR` for Cubism model mode.
-   - Green badge `LIVE INPUT` when avatar mode is turned off.
+4. **Preparing Live2D character** appears above the preview during loading.
 

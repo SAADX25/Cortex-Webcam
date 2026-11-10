@@ -23,17 +23,34 @@
 #include <vector>
 
 namespace {
+namespace core = Live2D::Cubism::Core;
+
 // Shader generation is invoked from the SDK. Its compile call is redirected by
 // CMake so a cold load can stop between individual shaders instead of compiling
 // the entire set before noticing that Studio is closing.
 thread_local std::stop_token avatarLoadStop;
 thread_local bool avatarShaderCompileStarted{};
 
+struct OffscreenOpacityOverride {
+    const core::csmModel* model{};
+    const float* values{};
+};
+thread_local OffscreenOpacityOverride offscreenOpacityOverride;
+
 void checkAvatarLoadStop() {
     if (avatarLoadStop.stop_requested())
         throw std::runtime_error("Live2D character loading cancelled");
 }
 }  // namespace
+
+// The Framework calls this in place of the Core getter during rendering.
+// Keep the Core's read-only opacity data and other models' artwork intact.
+extern "C" const float* csmCallingConvention CortexGetCubismOffscreenOpacities(
+    const core::csmModel* model) {
+    if (offscreenOpacityOverride.model == model)
+        return offscreenOpacityOverride.values;
+    return core::csmGetOffscreenOpacities(model);
+}
 
 extern "C" HRESULT WINAPI CortexCompileCubismShader(
     LPCVOID source, SIZE_T size, LPCSTR sourceName, const D3D_SHADER_MACRO* defines,
@@ -602,13 +619,13 @@ public:
             for (size_t i = 0; i < tracked.size(); ++i)
                 if (tracked[i]->valid)
                     _model->SetParameterValue(tracked[i]->index, measured[i]);
-            // Dampen secondary whole-body physics pendulums in camera-driven mode
-            // so head/gaze micro-movements do not make the entire torso/shoulders wobble.
+            // Keep the torso and shoulders at rest when only the face is tracked.
             for (const auto* sec : {&bodyAngleX2, &bodyAngleY2, &bodyCenter2,
                                     &leftShoulderUp2, &rightShoulderUp2}) {
                 if (sec->valid) {
                     const float v = _model->GetParameterValue(sec->index);
-                    _model->SetParameterValue(sec->index, sec->defVal + (v - sec->defVal) * .20f);
+                    const float weight = pose.armsEnabled ? .20f : 0.f;
+                    _model->SetParameterValue(sec->index, sec->defVal + (v - sec->defVal) * weight);
                 }
             }
         }
@@ -704,6 +721,20 @@ public:
                 loadTexture(*gpu_, assetPath(directory, settings.GetTextureFileName(i))));
             renderer->BindTexture(i, textures_.back().Get());
         }
+        if (std::filesystem::path(settings.GetTextureFileName(0)).filename() ==
+            "texture_night_guardian.png") {
+            auto* model = asset_->GetModel();
+            auto* ids = cubism::CubismFramework::GetIdManager();
+            const auto left = ids->GetId("PartJacketArmL");
+            const auto right = ids->GetId("PartJacketArmR");
+            for (int i = 0; i < model->GetOffscreenCount(); ++i) {
+                const auto owner = model->GetOffscreenOwnerId(i);
+                if (owner == left || owner == right)
+                    opaqueSleeves_.push_back(i);
+            }
+            if (!opaqueSleeves_.empty())
+                offscreenOpacities_.resize(model->GetOffscreenCount());
+        }
         checkAvatarLoadStop();
         renderer->IsPremultipliedAlpha(false);
     }
@@ -750,6 +781,18 @@ public:
         projection.MultiplyByMatrix(asset_->GetModelMatrix());
         renderer->StartFrame(context);
         renderer->SetMvpMatrix(&projection);
+        struct OpacityScope {
+            OffscreenOpacityOverride previous = offscreenOpacityOverride;
+            ~OpacityScope() { offscreenOpacityOverride = previous; }
+        } opacityScope;
+        if (!opaqueSleeves_.empty()) {
+            const auto* model = asset_->GetModel()->GetModel();
+            const auto* opacities = core::csmGetOffscreenOpacities(model);
+            std::copy_n(opacities, offscreenOpacities_.size(), offscreenOpacities_.begin());
+            for (const int sleeve : opaqueSleeves_)
+                offscreenOpacities_[sleeve] = 1.f;
+            offscreenOpacityOverride = {model, offscreenOpacities_.data()};
+        }
         renderer->DrawModel();
         renderer->EndFrame();
     }
@@ -759,6 +802,8 @@ private:
     std::shared_ptr<Runtime> runtime_;
     std::unique_ptr<Model> asset_;
     std::vector<ComPtr<ID3D11ShaderResourceView>> textures_;
+    std::vector<int> opaqueSleeves_;
+    std::vector<float> offscreenOpacities_;
     std::chrono::steady_clock::time_point previous_ = std::chrono::steady_clock::now();
     int motion_{-1}, expression_{-1};
     AvatarFraming framing_;

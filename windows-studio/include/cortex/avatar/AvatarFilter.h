@@ -6,7 +6,6 @@
 #include <stop_token>
 
 namespace cortex {
-struct HumanoidLandmarks;
 // Position offsets are fractions of the output frame; positive Y moves down.
 struct AvatarFraming {
     float scale{1}, x{}, y{};
@@ -26,7 +25,7 @@ struct UpperBodyPose {
     float bodyAngleX{}, bodyAngleY{}, bodyAngleZ{};
     // Body inference runs independently of face inference; use its own sample clock.
     std::chrono::steady_clock::time_point capturedAt;
-    std::shared_ptr<const HumanoidLandmarks> landmarks3D;
+    std::optional<unsigned> visibleHands;
 };
 struct AvatarPose {
     float yaw{}, pitch{}, roll{}, mouth{}, eyeOpen{1}, gazeX{}, gazeY{};
@@ -92,16 +91,7 @@ AvatarPose smoothAvatarPose(const AvatarPose& previous, const AvatarPose& target
 
 class AvatarFilter {
 public:
-    explicit AvatarFilter(std::shared_ptr<GpuDevice>);
     static std::optional<AvatarPose> map(const FaceLandmarks&);
     static AvatarPose testPose(double seconds);
-    // Called on the render thread with the compositing target and fullscreen VS bound.
-    void draw(const AvatarPose&, unsigned width, unsigned height,
-              const AvatarFraming& framing = {});
-
-private:
-    std::shared_ptr<GpuDevice> gpu_;
-    ComPtr<ID3D11PixelShader> shader_;
-    ComPtr<ID3D11Buffer> constants_;
 };
 }  // namespace cortex

@@ -60,24 +60,6 @@ float4 Rotate(Vertex v)
         uv = float2(v.uv.y, 1 - v.uv.x);
     return Source.Sample(LinearClamp, uv);
 }
-// Asset-free test rig. Coordinates are isotropic in portrait and landscape.
-float4 AvatarPreview(Vertex v)
-    : SV_TARGET {
-    float2 p = (v.uv - .5) * 2 * float2(max(1, BackgroundUV.w), max(1, 1 / BackgroundUV.w));
-    float angle = radians(Spill);
-    p = mul(float2x2(cos(angle), sin(angle), -sin(angle), cos(angle)), p);
-    float edge = length(p / float2(.47, .58)) - 1;
-    float alpha = saturate(.5 - edge / max(fwidth(edge), .0001));
-    float2 face = p - float2(Similarity, Softness) * .003;
-    float2 eye =
-        float2(abs(face.x - BackgroundUV.y * .025) - .17, face.y + .09 - BackgroundUV.z * .025);
-    float eyes = 1 - smoothstep(.9, 1.05, length(eye / float2(.052, .009 + .065 * BackgroundUV.x)));
-    float mouth =
-        1 - smoothstep(.9, 1.05, length((face - float2(0, .22)) / float2(.09, .012 + .065 * Mode)));
-    float3 color = lerp(float3(.12, .43, .70), float3(.24, .83, .95), saturate(.6 - p.y));
-    color = lerp(color, float3(.035, .065, .11), max(eyes, mouth));
-    return float4(color * alpha, alpha);
-}
 // Fixed 512x288 normalized RGB NCHW tensor, generated on the GPU.
 RWStructuredBuffer<float> Tensor : register(u0);
 [numthreads(16, 16, 1)] void Preprocess(uint3 id : SV_DispatchThreadID) {

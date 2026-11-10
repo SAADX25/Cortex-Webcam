@@ -183,7 +183,6 @@ int main(int argc, char** argv) {
         processor.setAvatarModel(reloading.get());
         FilterSettings settings;
         settings.avatarEnabled = true;
-        settings.avatarMode = 1;
         settings.avatarArms = true;
         settings.transparent = true;
         processor.setSettings(settings);
@@ -191,6 +190,9 @@ int main(int argc, char** argv) {
         check(visible(first) > 25000, "Ren must produce textured visible pixels");
         auto exported = read(gpu, processor.exportFrame(true));
         check(visible(exported) > 25000 && exported[3] == 0, "Avatar export must preserve alpha");
+        for (const int x : {386, 574})
+            check(exported[(255 * 960 + x) * 4 + 3] >= 250,
+                  "Night Guardian coat sleeves must cover the background");
         saveBmp(argv[2], read(gpu, processor.exportFrame(false)), 960, 720);
         settings.avatarFraming = {3.2f, 0, -.05f};
         processor.setSettings(settings);
@@ -377,7 +379,6 @@ int main(int argc, char** argv) {
             auto maleModel = loadAvatarModel(gpu, customPath);
             check(bool(maleModel), "Custom male model must load");
             processor.setAvatarModel(std::move(maleModel));
-            settings.avatarMode = 1;
             settings.avatarEnabled = true;
             settings.transparent = true;
             settings.avatarTestMotion = false;
@@ -404,18 +405,14 @@ int main(int argc, char** argv) {
                   "Face blink and mouth tracking must deform custom male model");
             std::cout << "Model swap to " << customPath.filename().string() << " and tracking passed" << std::endl;
         }
-        std::cout << "Switching to GPU avatar" << std::endl;
-        settings.avatarMode = 0;
-        processor.setSettings(settings);
-        auto fallback = read(gpu, processor.render({}));
-        check(visible(fallback) > 10000, "Switching a loaded model to GPU test avatar must work");
         std::cout << "Unloading model" << std::endl;
         processor.setAvatarModel(nullptr);
+        check(visible(read(gpu, processor.render({}))) == 0,
+              "Without a Live2D model the transparent scene must have no avatar pixels");
         std::cout << "Reloading moc3" << std::endl;
         auto mocPath = path;
         mocPath.replace_filename("Ren.moc3");
         processor.setAvatarModel(loadAvatarModel(gpu, mocPath));
-        settings.avatarMode = 1;
         processor.setSettings(settings);
         check(visible(read(gpu, processor.render({}))) > 25000,
               "moc3 selection must resolve companion settings");

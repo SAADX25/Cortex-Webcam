@@ -3,7 +3,7 @@
 	"FileReferences": {
 		"Moc": "Ren.moc3",
 		"Textures": [
-			"Ren.2048/texture_00.png"
+			"Ren.2048/texture_night_guardian.png"
 		],
 		"Physics": "Ren.physics3.json",
 		"DisplayInfo": "Ren.cdi3.json",

@@ -107,13 +107,11 @@ public:
         expect([](const auto& state) { return state.ready && state.running; }, 12s,
                "Studio must start its receiver automatically");
         cortex_studio_set(engine, CortexAvatarTestMotion, 0);
-        cortex_studio_set(engine, CortexAvatarMode, 1);
         cortex_studio_set(engine, CortexAvatarEnabled, 1);
     }
     void begin(const std::filesystem::path& model) {
         cortex_studio_path(engine, 4, model.c_str());
-        expect([](const auto& state) { return loading(state); }, 5s,
-               "A model request must enter the loading state");
+        require(loading(snapshot()), "A model request must immediately enter the loading state");
     }
     void loaded() {
         expect(

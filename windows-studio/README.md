@@ -41,7 +41,7 @@ include/cortex/
   sources/VideoSourceManager.h       Source selection and PiP scene snapshots
   discovery/                         Phone auto-discovery and handshake
   tracking/                          Face, hand, body tracking, head pose, smoothing
-  avatar/AvatarFilter.h              Avatar rendering (built-in + Live2D Cubism)
+  avatar/AvatarFilter.h              Avatar pose mapping and Live2D model interface
   processing/                        GPU compositor, transforms, RVM matting, backgrounds
   output/UnityCameraOutput.h         Virtual camera output
   ui/StudioBridge.h                  Native API consumed by the WPF UI

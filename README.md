@@ -45,7 +45,7 @@ Cortex Webcam/
 │   ├── include/cortex/    Public headers: core, gpu, transport, decoding, sources,
 │   │                      discovery, tracking, avatar, processing, output, ui
 │   ├── src/               Implementations (same folders as include/)
-│   ├── apps/              Console executables (cortex-receive, cortex-motion)
+│   ├── apps/              Console receiver (cortex-receive)
 │   ├── ui/                WPF desktop app (CortexStudio)
 │   ├── shaders/           HLSL
 │   ├── tests/             C++ tests + fixtures
@@ -53,7 +53,6 @@ Cortex Webcam/
 │   ├── third_party/       Bundled libraries
 │   ├── .deps/             Downloaded libraries (git-ignored)
 │   └── patches/           Historical patches
-├── vrm-viewer/            Unity VRM avatar viewer
 ├── assets/                Shared avatar assets (Live2D Ren)
 ├── docs/                  Protocol and system docs
 └── dist/                  Release builds (git-ignored)

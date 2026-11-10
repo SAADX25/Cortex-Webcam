@@ -207,36 +207,24 @@ BodyTracker::BodyTracker(const std::filesystem::path& directory)
 BodyTracker::~BodyTracker() = default;
 void BodyTracker::reset() noexcept { impl_->hasRoi = false; impl_->handIdentity.reset(); impl_->handVisibility.reset(); }
 UpperBodyPose BodyTracker::track(std::span<const uint8_t> image, unsigned w, unsigned h) {
-    auto body = trackBody(image, w, h);
-    auto raw = body.landmarks3D ? std::make_shared<HumanoidLandmarks>(*body.landmarks3D)
-                               : std::make_shared<HumanoidLandmarks>();
+    std::array<Joint3D, 33> imageJoints{};
+    auto body = trackBody(image, w, h, imageJoints);
     if (impl_->hands) {
-        raw->handsAvailable = true;
-        auto hands = impl_->hands->track(image, w, h);
-        raw->hands = impl_->handIdentity.update(hands, raw->bodyImage, w, h, std::chrono::steady_clock::now());
-        impl_->handVisibility.update(raw->hands,w,h,std::chrono::steady_clock::now());
-        if (raw->hands[0].confidence >= .8f && raw->bodyImage[13].confidence >= .5f)
-            mapHand21(body.left, {raw->bodyImage[13].x, raw->bodyImage[13].y}, raw->hands[0]);
-        if (raw->hands[1].confidence >= .8f && raw->bodyImage[14].confidence >= .5f)
-            mapHand21(body.right, {raw->bodyImage[14].x, raw->bodyImage[14].y}, raw->hands[1]);
+        const auto detections = impl_->hands->track(image, w, h);
+        const auto now = std::chrono::steady_clock::now();
+        auto hands = impl_->handIdentity.update(detections, imageJoints, w, h, now);
+        impl_->handVisibility.update(hands, w, h, now);
+        body.visibleHands = (hands[0].confidence >= .8f ? 1 : 0) +
+                            (hands[1].confidence >= .8f ? 1 : 0);
+        if (hands[0].confidence >= .8f && imageJoints[13].confidence >= .5f)
+            mapHand21(body.left, {imageJoints[13].x, imageJoints[13].y}, hands[0]);
+        if (hands[1].confidence >= .8f && imageJoints[14].confidence >= .5f)
+            mapHand21(body.right, {imageJoints[14].x, imageJoints[14].y}, hands[1]);
     }
-    const auto setHandFallback = [&](int side, const ArmPose& arm) {
-        if (arm.handConfidence > 0.f) {
-            raw->handOpen[side] = arm.hand;
-            raw->handOpenConfidence[side] = arm.handConfidence;
-            raw->wristBend[side] = arm.wrist;
-            raw->wristConfidence[side] = arm.handConfidence;
-        } else if (arm.confidence >= .5f) {
-            raw->handOpen[side] = .72f;
-            raw->handOpenConfidence[side] = arm.confidence * .8f;
-        }
-    };
-    setHandFallback(0, body.left);
-    setHandFallback(1, body.right);
-    body.landmarks3D = std::move(raw);
     return body;
 }
-UpperBodyPose BodyTracker::trackBody(std::span<const uint8_t> image, unsigned w, unsigned h) {
+UpperBodyPose BodyTracker::trackBody(std::span<const uint8_t> image, unsigned w, unsigned h,
+                                    std::array<Joint3D, 33>& imageJoints) {
     if (!w || !h || image.size() != size_t(w) * h * 4)
         throw std::invalid_argument("Invalid body tracking image");
     auto& s = *impl_;
@@ -342,14 +330,11 @@ UpperBodyPose BodyTracker::trackBody(std::span<const uint8_t> image, unsigned w,
         }
     auto pose = run(s.pose, s.input, poseShape);
     const float* landmarks = nullptr;
-    const float* world = nullptr;
     float presence = 0;
     for (auto& out : pose) {
         const auto shape = out.GetTensorTypeAndShapeInfo().GetShape();
         if (shape == std::vector<int64_t>{1, 195})
             landmarks = out.GetTensorData<float>();
-        if (shape == std::vector<int64_t>{1, 117})
-            world = out.GetTensorData<float>();
         if (shape == std::vector<int64_t>{1, 1})
             presence = out.GetTensorData<float>()[0];
     }
@@ -421,17 +406,11 @@ UpperBodyPose BodyTracker::trackBody(std::span<const uint8_t> image, unsigned w,
     };
     hand(leftArm, 13, 15, 17, 19, 21);
     hand(rightArm, 14, 16, 18, 20, 22);
-    UpperBodyPose result{leftArm, rightArm, std::max(.61f, presence * shoulderConfidence),
-            angles.angleX, angles.angleY, angles.angleZ};
-    auto raw = std::make_shared<HumanoidLandmarks>();
     for (size_t i = 0; i < 33; ++i)
-        raw->bodyImage[i] = {points[i].x, points[i].y, landmarks[i*5+2] * (2*radius/p), visibility[i]};
-    if (world)
-        for (size_t i = 0; i < 33; ++i)
-            raw->body[i] = {right.x * world[i*3] - up.x * world[i*3+1],
-                -(right.y * world[i*3] - up.y * world[i*3+1]), -world[i*3+2], visibility[i]};
-    result.landmarks3D = std::move(raw);
-    return result;
+        imageJoints[i] = {points[i].x, points[i].y, landmarks[i * 5 + 2] * (2 * radius / p),
+                          visibility[i]};
+    return {leftArm, rightArm, std::max(.61f, presence * shoulderConfidence),
+            angles.angleX, angles.angleY, angles.angleZ};
 }
 #else
 struct BodyTracker::Impl {};

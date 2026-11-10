@@ -30,7 +30,6 @@ struct VideoProcessor::Impl {
     std::unique_ptr<GpuColorConverter> backgroundConverter;
     std::filesystem::path model;
     FilterSettings settings;
-    std::unique_ptr<AvatarFilter> avatar;
     std::unique_ptr<AvatarModel> avatarModel;
     std::unique_ptr<FaceTracker> tracker;
     std::chrono::steady_clock::time_point avatarStart, poseTime;
@@ -322,9 +321,7 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     // Convert/infer before binding the composite target. AI has an explicit reduced-size I/O
     // bridge.
     AvatarPose pose;
-    if (s.settings.avatarEnabled) {
-        if (!s.avatar)
-            s.avatar = std::make_unique<AvatarFilter>(s.gpu);
+    if (s.settings.avatarEnabled && s.avatarModel) {
         if (s.settings.avatarTestMotion) {
             const auto elapsed = std::chrono::steady_clock::now() - s.avatarStart;
             pose = AvatarFilter::testPose(std::chrono::duration<double>(elapsed).count());
@@ -435,6 +432,21 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
                 s.trackingStatus = s.tracker->status();
             }
             if (trackingFound) {
+                if (s.settings.avatarSmoothing > 0 && !recentered && s.wasTracking &&
+                    s.lastPoseSample != std::chrono::steady_clock::time_point{}) {
+                    // Hold the last target while measurements stay inside the noise band.
+                    // Beyond it, move continuously from the edge before adaptive smoothing.
+                    const auto hold = [](float previous, float measured, float tolerance) {
+                        return std::clamp(previous, measured - tolerance, measured + tolerance);
+                    };
+                    const auto& previous = s.lastTrackedPose;
+                    targetPose.yaw = hold(previous.yaw, targetPose.yaw, 1.2f);
+                    targetPose.pitch = hold(previous.pitch, targetPose.pitch, 1.2f);
+                    targetPose.roll = hold(previous.roll, targetPose.roll, 1.2f);
+                    targetPose.positionX = hold(previous.positionX, targetPose.positionX, .005f);
+                    targetPose.positionY = hold(previous.positionY, targetPose.positionY, .005f);
+                    targetPose.depthScale = hold(previous.depthScale, targetPose.depthScale, .015f);
+                }
                 s.lastTrackedPose = targetPose;
                 s.lastTrackingTime = sampleAt;
                 s.hasValidTracking = true;
@@ -587,14 +599,10 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     if (background.view && !s.settings.transparent)
         s.draw(background, nullptr, {}, true);
     if (s.settings.avatarEnabled) {
-        if (s.settings.avatarMode == 1) {
-            if (s.avatarModel) {
-                s.avatarModel->setAnimation(s.settings.avatarMotion, s.settings.avatarExpression);
-                s.avatarModel->setFraming(s.settings.avatarFraming);
-                s.avatarModel->draw(context, pose, s.target.width, s.target.height);
-            }
-        } else {
-            s.avatar->draw(pose, s.target.width, s.target.height, s.settings.avatarFraming);
+        if (s.avatarModel) {
+            s.avatarModel->setAnimation(s.settings.avatarMotion, s.settings.avatarExpression);
+            s.avatarModel->setFraming(s.settings.avatarFraming);
+            s.avatarModel->draw(context, pose, s.target.width, s.target.height);
         }
     } else if (s.settings.removal != RemovalMode::BackgroundOnly)
         for (const auto& layer : scene.layers)

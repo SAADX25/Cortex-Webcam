@@ -164,14 +164,10 @@ int main(int argc, char** argv) {
         processor.setSettings(settings);
         auto avatar = read(gpu, processor.render(scene(red)));
         const auto center = (32 * 64 + 32) * 4;
-        check(avatar[3] == 0 && avatar[center + 3] == 255 && avatar[center + 1] > 0,
-              "Avatar replaces camera with transparent surround");
-        check(read(gpu, processor.exportFrame(true))[center + 3] == 255, "Avatar reaches export");
-        settings.avatarFraming = {1, .3f, 0};
-        processor.setSettings(settings);
-        const auto shiftedAvatar = read(gpu, processor.render(scene(red)));
-        check(shiftedAvatar[center + 3] < 10,
-              "Moving GPU avatar must move its actual opacity mask");
+        check(avatar[center + 3] == 0,
+              "Pending Live2D must not display a placeholder or expose the camera");
+        check(read(gpu, processor.exportFrame(true))[center + 3] == 0,
+              "Pending Live2D must keep the camera out of the output");
         settings.avatarFraming.scale = 0;
         bool rejectedFraming = false;
         try { processor.setSettings(settings); }

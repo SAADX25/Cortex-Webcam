@@ -41,14 +41,13 @@ internal static class Program
                   "Camera tracking must enable avatar, disable demo and allow calibration");
             avatar.IsChecked = false;
             Check(((Slider)window.FindName("AvatarSensitivity")).Value == 1.3 &&
-                  ((CheckBox)window.FindName("AvatarArms")).IsChecked == true,
-                  "Live head sensitivity and arm tracking defaults must be present");
+                  window.FindName("AvatarArms") is null,
+                  "Live head sensitivity must be available without an arm tracking control");
             Check(((CheckBox)window.FindName("AvatarFollowPosition")).IsChecked == true &&
                   ((CheckBox)window.FindName("AvatarMirror")).IsChecked != true,
                   "Face position must follow the camera by default with mirroring independently disabled");
-            Check(((CheckBox)window.FindName("AvatarFollowDistance")).IsChecked == true &&
-                  ((CheckBox)window.FindName("AvatarArms")).Visibility == Visibility.Visible,
-                  "Distance following and optional upper-body controls must be available");
+            Check(((CheckBox)window.FindName("AvatarFollowDistance")).IsChecked == true,
+                  "Distance following must remain available");
             typeof(MainWindow).GetMethod("AvatarRecenterClick", BindingFlags.NonPublic | BindingFlags.Instance)!
                 .Invoke(window, new object[] { window, new RoutedEventArgs() });
             Check(((string)((Button)window.FindName("AvatarRecenterButton")).Content).Contains("position") &&
@@ -64,6 +63,10 @@ internal static class Program
                 SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(window.Dispatcher));
                 var load = (Task)typeof(MainWindow).GetMethod("LoadAvatarAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
                     .Invoke(window, new object[] { modelSettings })!;
+                Check(avatar.IsChecked == true &&
+                      ((FrameworkElement)window.FindName("MonitorLoadingPill")).Visibility == Visibility.Visible &&
+                      window.FindName("MonitorAvatarProgress") is ProgressBar { IsIndeterminate: true },
+                      "Loading a model must immediately show progress above the camera preview");
                 typeof(MainWindow).GetMethod("CancelAvatarLoadClick", BindingFlags.NonPublic | BindingFlags.Instance)!
                     .Invoke(window, new object[] { window, new RoutedEventArgs() });
                 var frame = new DispatcherFrame();
@@ -72,6 +75,7 @@ internal static class Program
                 load.GetAwaiter().GetResult();
                 Check(avatar.IsChecked != true &&
                       ((FrameworkElement)window.FindName("AvatarLoadingIndicator")).Visibility == Visibility.Collapsed &&
+                      ((FrameworkElement)window.FindName("MonitorLoadingPill")).Visibility == Visibility.Collapsed &&
                       ((ComboBox)window.FindName("AvatarExpressionChoice")).Items.Count == 1 &&
                       (string)typeof(MainWindow).GetField("_avatarModelPath", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(window)! == "",
                       "Canceled metadata reads must not restore the model, choices or loading indicator");
@@ -85,19 +89,13 @@ internal static class Program
             var avatarError = (string)friendlyError.Invoke(null, new object[] { "Invalid Live2D moc3 model" })!;
             Check(avatarError.Contains("Live2D") && !avatarError.Contains("RVM"),
                   "Avatar errors must not suggest replacing the background AI model");
-            typeof(MainWindow).GetMethod("AvatarCubismClick", BindingFlags.NonPublic | BindingFlags.Instance)!
-                .Invoke(window, new object[] { window, new RoutedEventArgs() });
-            Check(avatar.IsChecked == true, "Selecting Live2D must enable avatar output");
-            avatar.IsChecked = false;
-            typeof(MainWindow).GetMethod("AvatarChanged", BindingFlags.NonPublic | BindingFlags.Instance)!
-                .Invoke(window, new object[] { window, new RoutedEventArgs() });
             Check(!((ComboBox)window.FindName("AvatarMotionChoice")).IsEnabled,
                   "Camera tracking must not enable prerecorded motion selection");
-            var testBtn = (Button)window.FindName("AvatarTestBtn");
-            var cubismBtn = (Button)window.FindName("AvatarCubismBtn");
             var modelCard = (FrameworkElement)window.FindName("CubismModelCard");
             var detailsPanel = (FrameworkElement)window.FindName("AvatarDetailsPanel");
-            Check(testBtn is not null && cubismBtn is not null && modelCard is not null, "Avatar model controls must be present");
+            Check(window.FindName("AvatarTestBtn") is null && modelCard is not null &&
+                  window.FindName("ChooseCubismBtn") is Button,
+                  "Live2D model controls must be available without a GPU test avatar");
             Check(window.FindName("AvatarMotionChoice") is ComboBox &&
                   window.FindName("AvatarExpressionChoice") is ComboBox,
                   "Model motion and expression selectors are missing");

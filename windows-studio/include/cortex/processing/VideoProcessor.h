@@ -14,7 +14,7 @@ struct FilterSettings {
     float similarity{0.13f}, softness{0.10f}, spill{0.8f};
     bool transparent{false};
     bool avatarEnabled{}, avatarTestMotion{};
-    int avatarMode{0}, avatarMotion{-1}, avatarExpression{-1};
+    int avatarMotion{-1}, avatarExpression{-1};
     AvatarFraming avatarFraming;
     float avatarSmoothing{.06f};
     float avatarSensitivity{1.3f};

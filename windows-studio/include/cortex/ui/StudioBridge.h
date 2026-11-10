@@ -17,7 +17,7 @@ struct CortexStudioState {
 enum CortexAvatarControl {
     CortexAvatarEnabled = 19,
     CortexAvatarTestMotion = 20,
-    CortexAvatarMode = 21,
+    CortexAvatarMode = 21,  // Reserved for older Desktop builds.
     CortexAvatarMotion = 22,
     CortexAvatarExpression = 23,
     CortexAvatarScale = 24,
@@ -26,7 +26,7 @@ enum CortexAvatarControl {
     CortexAvatarSmoothing = 27,
     CortexAvatarRecenter = 28,
     CortexAvatarSensitivity = 29,
-    CortexAvatarArms = 30,
+    CortexAvatarArms = 30,  // Reserved for older Desktop builds.
     CortexAvatarMirror = 31,
     CortexAvatarFollowPosition = 32,
     CortexAvatarFollowDistance = 33

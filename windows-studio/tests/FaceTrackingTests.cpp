@@ -245,7 +245,6 @@ int main(int argc, char** argv) {
         processor.setFaceTracker(std::move(fixtureTracker));
         FilterSettings settings;
         settings.avatarEnabled = true;
-        settings.avatarMode = 1;
         settings.avatarSmoothing = 0;
         settings.avatarArms = true;
         settings.avatarSensitivity = 1;
@@ -368,8 +367,39 @@ int main(int argc, char** argv) {
         processor.setSettings(settings);
         processor.render(scene);
         check(!recorded->pose.armsEnabled && recorded->pose.arms.left.confidence == 0 &&
-                  recorded->pose.arms.right.confidence == 0,
+                  recorded->pose.arms.right.confidence == 0 && recorded->pose.bodyAngleZ == 0,
               "Disabling arms must take effect even with a cached face sample");
+        settings.avatarSmoothing = .06f;
+        ++settings.avatarCalibration;
+        processor.setSettings(settings);
+        controlled->face.hasHeadPosition = true;
+        controlled->face.headPositionX = 0;
+        controlled->face.headPositionY = 0;
+        controlled->face.headDepth = 5;
+        controlled->face.headRotation = HeadRotation{};
+        controlled->face.capturedAt = std::chrono::steady_clock::now();
+        frame->readyAt = controlled->face.capturedAt;
+        processor.render(scene);
+        for (float noise : {.8f, -.8f, .9f, -.9f}) {
+            controlled->face.headRotation = HeadRotation{noise, noise, noise};
+            controlled->face.headPositionX = noise * .004f;
+            controlled->face.headPositionY = noise * .004f;
+            controlled->face.headDepth = 5 + noise * .05f;
+            controlled->face.capturedAt += std::chrono::milliseconds(33);
+            processor.render(scene);
+            check(recorded->pose.yaw == 0 && recorded->pose.pitch == 0 &&
+                      recorded->pose.roll == 0 && recorded->pose.positionX == 0 &&
+                      recorded->pose.positionY == 0 && recorded->pose.depthScale == 1,
+                  "Stationary camera noise must not rotate, translate or resize the avatar");
+        }
+        controlled->face.headRotation = HeadRotation{15, 0, 0};
+        controlled->face.headPositionX = .08f;
+        controlled->face.headDepth = 4;
+        controlled->face.capturedAt += std::chrono::milliseconds(33);
+        processor.render(scene);
+        check(recorded->pose.yaw > 1 && recorded->pose.positionX > .01f &&
+                  recorded->pose.depthScale > 1.03f,
+              "Deliberate motion must still reach the avatar with smoothing enabled");
         settings.avatarTestMotion = true;
         processor.setSettings(settings);
         processor.render(scene);

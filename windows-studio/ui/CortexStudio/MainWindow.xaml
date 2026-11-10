@@ -201,8 +201,8 @@
                     <TextBlock x:Name="LiveLabel" Text="STANDBY" FontSize="9" FontWeight="Bold" Foreground="#CBD5E1" />
                     <Border x:Name="MonitorLoadingPill" Background="#1E293B" CornerRadius="4" Padding="6,2" Margin="10,0,0,0" Visibility="Collapsed">
                       <StackPanel Orientation="Horizontal">
-                        <ProgressBar Width="12" Height="12" IsIndeterminate="True" Foreground="#38BDF8" Background="Transparent" BorderThickness="0" Margin="0,0,6,0" />
-                        <TextBlock x:Name="MonitorLoadingText" Text="Loading character…" FontSize="9" FontWeight="SemiBold" Foreground="#38BDF8" />
+                        <TextBlock Text="Preparing Live2D character…" FontSize="10" FontWeight="SemiBold" Foreground="#38BDF8" VerticalAlignment="Center" />
+                        <ProgressBar x:Name="MonitorAvatarProgress" Width="96" Height="4" IsIndeterminate="True" Foreground="#38BDF8" Background="#334155" BorderThickness="0" Margin="8,0,0,0" VerticalAlignment="Center" AutomationProperties.Name="Preparing Live2D character" />
                       </StackPanel>
                     </Border>
                   </StackPanel>
@@ -331,26 +331,19 @@
                 </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                   <StackPanel Margin="18,18,18,20">
-                    <TextBlock Text="Avatar mode" Style="{StaticResource SectionTitle}" />
+                    <TextBlock Text="Live2D Cubism" Style="{StaticResource SectionTitle}" />
                     <CheckBox x:Name="AvatarEnabled" Content="Enable avatar" Click="AvatarChanged" />
                     
                     <StackPanel x:Name="AvatarDetailsPanel" Visibility="Collapsed" Margin="0,8,0,12">
-                      <TextBlock Text="Avatar type" FontSize="11" Foreground="{StaticResource Muted}" Margin="0,0,0,6" />
-                      <UniformGrid Columns="2" Margin="0,0,0,8">
-                        <Button x:Name="AvatarTestBtn" Content="GPU Test Avatar" Click="AvatarTestClick" Style="{StaticResource Selected}" Margin="0,0,3,0" Height="32" />
-                        <Button x:Name="AvatarCubismBtn" Content="Live2D Cubism" Click="AvatarCubismClick" Margin="3,0,0,0" Height="32" />
-                      </UniformGrid>
-                      
                       <!-- Cubism Model Picker -->
-                      <Border x:Name="CubismModelCard" Background="#0C121E" BorderBrush="#1C273C" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8" Visibility="Collapsed">
+                      <Border x:Name="CubismModelCard" Background="#0C121E" BorderBrush="#1C273C" BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,0,0,8">
                         <StackPanel>
                           <TextBlock x:Name="CubismModelName" Text="No model selected" FontSize="11" FontWeight="SemiBold" Foreground="#F8FAFC" />
                           <TextBlock x:Name="CubismSdkNotice" Text="Choose a model3.json file with its textures and animations." FontSize="10" Foreground="#38BDF8" TextWrapping="Wrap" Margin="0,3,0,6" />
                           <Button x:Name="ChooseCubismBtn" Content="Choose Live2D model…" Click="ChooseCubismModelClick" Height="28" FontSize="11" />
                           <Button x:Name="LoadSampleBtn" Content="Load Anime Character (Ren)" Click="LoadRenClick" Height="28" FontSize="11" Margin="0,6,0,0" />
                           <StackPanel x:Name="AvatarLoadingIndicator" Visibility="Collapsed" Margin="0,8,0,2">
-                            <ProgressBar x:Name="AvatarLoadingBar" Height="4" IsIndeterminate="True" Foreground="#38BDF8" Background="#141E2F" BorderThickness="0" />
-                            <TextBlock x:Name="AvatarLoadingText" Text="Loading anime character..." Foreground="#38BDF8" FontSize="10" FontWeight="SemiBold" Margin="0,4,0,0" />
+                            <ProgressBar Height="4" IsIndeterminate="True" Foreground="#38BDF8" Background="#141E2F" BorderThickness="0" AutomationProperties.Name="Preparing Live2D character" />
                             <Button x:Name="CancelAvatarLoadButton" Content="Cancel loading" Click="CancelAvatarLoadClick" Height="28" FontSize="11" Margin="0,6,0,0" />
                           </StackPanel>
                           <TextBlock x:Name="AvatarMotionLabel" Text="Motion" Foreground="{StaticResource Muted}" FontSize="11" Margin="0,10,0,4" />
@@ -403,7 +396,6 @@
                         <TextBlock Text="Head rotation sensitivity" Foreground="{StaticResource Muted}" />
                       </DockPanel>
                       <Slider x:Name="AvatarSensitivity" Minimum="0.5" Maximum="2.5" Value="1.3" SmallChange="0.1" ValueChanged="AvatarTrackingOptionsChanged" AutomationProperties.Name="Head rotation sensitivity" />
-                      <CheckBox x:Name="AvatarArms" Content="Track upper body &amp; arms" IsChecked="True" Click="AvatarTrackingOptionsChanged" ToolTip="Keep shoulders, elbows and wrists visible. Shoulder lift and elbow bend are tracked separately." Margin="0,12,0,4" />
                       <CheckBox x:Name="AvatarFollowPosition" Content="Follow face position" IsChecked="True" Click="AvatarTrackingOptionsChanged" ToolTip="Move the character left, right, up and down with your face. Set neutral face &amp; position sets the center." Margin="0,10,0,4" />
                       <CheckBox x:Name="AvatarFollowDistance" Content="Follow camera distance" IsChecked="True" Click="AvatarTrackingOptionsChanged" ToolTip="Move closer or farther from the camera to change the character's apparent size. Set neutral face &amp; position resets the reference distance." Margin="0,6,0,4" />
                       <CheckBox x:Name="AvatarMirror" Content="Mirror movement" Click="AvatarTrackingOptionsChanged" Margin="0,6,0,4" />
@@ -627,7 +619,7 @@
         <Grid Margin="16,0">
           <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
             <Ellipse Width="5" Height="5" Fill="#10B981" Margin="0,0,8,0" />
-            <TextBlock Text="GPU Accelerated Engine (DirectX 11)" FontSize="9" Foreground="#93A4B8" />
+            <TextBlock Text="GPU video and Live2D · Direct3D 11" ToolTip="Video decoding, preview and Live2D use Direct3D 11. AI background removal uses DirectML on Direct3D 12." FontSize="9" Foreground="#93A4B8" />
           </StackPanel>
           <TextBlock Text="F11  Focus preview     /     F1  Help" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="9" Foreground="#475569" />
         </Grid>

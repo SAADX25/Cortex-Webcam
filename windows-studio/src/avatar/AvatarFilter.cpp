@@ -1,5 +1,4 @@
 #include "cortex/avatar/AvatarFilter.h"
-#include "gpu/GpuHelpers.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -119,43 +118,5 @@ AvatarPose AvatarFilter::testPose(double seconds) {
     p.bodyAngleZ = 3 * std::sin(t * .5f);
     p.cameraDriven = false;
     return p;
-}
-
-AvatarFilter::AvatarFilter(std::shared_ptr<GpuDevice> gpu)
-    : gpu_(std::move(gpu)) {
-    const auto code = detail::compile("AvatarPreview", "ps_5_0");
-    detail::hr(gpu_->device->CreatePixelShader(code->GetBufferPointer(), code->GetBufferSize(),
-                                               nullptr, &shader_),
-               "Avatar preview shader");
-    D3D11_BUFFER_DESC desc{};
-    desc.ByteWidth = 32;
-    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    detail::hr(gpu_->device->CreateBuffer(&desc, nullptr, &constants_), "Avatar pose buffer");
-}
-
-void AvatarFilter::draw(const AvatarPose& pose, unsigned width, unsigned height,
-                        const AvatarFraming& framing) {
-    const float depthScale = pose.cameraDriven ? pose.depthScale : 1;
-    const float scale = framing.scale * depthScale;
-    const float scaledWidth = width * scale, scaledHeight = height * scale;
-    const float top = std::min(1.f, float(width) / float(height));
-    const float moveX = pose.cameraDriven ? pose.positionX : 0;
-    const float moveY = pose.cameraDriven ? pose.positionY : 0;
-    D3D11_VIEWPORT viewport{(width - scaledWidth) * .5f + (framing.x + moveX) * width,
-                            (1 - scale) * (1 - top) * height * .5f +
-                                (framing.y + moveY) * height,
-                            scaledWidth,
-                            scaledHeight,
-                            0,
-                            1};
-    const float params[] = {pose.yaw,     pose.pitch, pose.roll,  pose.mouth,
-                            pose.eyeOpen, pose.gazeX, pose.gazeY, float(width) / float(height)};
-    auto* context = gpu_->context.Get();
-    context->RSSetViewports(1, &viewport);
-    context->UpdateSubresource(constants_.Get(), 0, nullptr, params, 0, 0);
-    auto* buffer = constants_.Get();
-    context->PSSetConstantBuffers(0, 1, &buffer);
-    context->PSSetShader(shader_.Get(), nullptr, 0);
-    context->Draw(3, 0);
 }
 }  // namespace cortex

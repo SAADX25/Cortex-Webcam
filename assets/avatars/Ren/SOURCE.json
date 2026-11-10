@@ -2,6 +2,11 @@
   "repository": "https://github.com/Live2D/CubismNativeSamples",
   "commit": "a3a64f6cb327aafce380949e0f54fe51c4d773d9",
   "model": "Ren.model3.json",
+  "outfit": {
+    "name": "Night Guardian",
+    "texture": "Ren.2048/texture_night_guardian.png",
+    "credit": "This content uses sample data owned and copyrighted by Live2D Inc."
+  },
   "terms": [
     "https://www.live2d.com/eula/live2d-free-material-license-agreement_en.html",
     "https://www.live2d.com/eula/live2d-sample-model-terms_en.html"

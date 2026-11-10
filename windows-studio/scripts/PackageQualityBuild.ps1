@@ -103,8 +103,8 @@ Cortex source is in the adjacent windows-studio and android-sender workspace dir
 $launchers=@{
     'Start-Quality-Test.cmd'='--filter none --fps 30 --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
     'Start-Quality-60fps.cmd'='--filter none --fps 60 --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
-    'Start-Chroma-Key.cmd'='--filter chroma --fps 30 --background-image "%~dp0assets\background.bmp" --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
-    'Start-AI-Matting.cmd'='--filter ai --fps 30 --background-image "%~dp0assets\background.bmp" --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
+    'Start-Chroma-Key.cmd'='--filter chroma --fps 30 --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
+    'Start-AI-Matting.cmd'='--filter ai --fps 30 --model "%~dp0models\rvm_mobilenetv3_fp32.onnx"'
 }
 foreach($entry in $launchers.GetEnumerator()){
     $lines=@('@echo off','cd /d "%~dp0"','echo Cortex Studio quality test - press Q to quit.',('"%~dp0CortexStudio.exe" '+$entry.Value),'set "CORTEX_EXIT=%ERRORLEVEL%"','pause','exit /b %CORTEX_EXIT%')
@@ -115,21 +115,6 @@ foreach($entry in $launchers.GetEnumerator()){
     Set-Content -LiteralPath "$package\Install-Virtual-Camera.cmd" -Encoding ascii
 @('@echo off','cd /d "%~dp0"','powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\InstallVirtualCamera.ps1" -Uninstall','pause') |
     Set-Content -LiteralPath "$package\Uninstall-Virtual-Camera.cmd" -Encoding ascii
-
-# One-time static BMP asset; live video color conversion stays on GPU.
-$width=1280;$height=720;$size=$width*$height*3
-$stream=[IO.File]::Create("$package\assets\background.bmp")
-$writer=[IO.BinaryWriter]::new($stream)
-try{
-    $writer.Write([byte[]]@(66,77));$writer.Write([int]($size+54));$writer.Write([int]0);$writer.Write([int]54)
-    $writer.Write([int]40);$writer.Write([int]$width);$writer.Write([int]$height);$writer.Write([int16]1);$writer.Write([int16]24)
-    $writer.Write([int]0);$writer.Write([int]$size);$writer.Write([int]0);$writer.Write([int]0);$writer.Write([int]0);$writer.Write([int]0)
-    for($y=0;$y -lt $height;$y++){
-        $row=[byte[]]::new($width*3)
-        for($x=0;$x -lt $width;$x++){$row[$x*3]=[byte](64+96*$y/$height);$row[$x*3+1]=[byte](24+40*$y/$height);$row[$x*3+2]=[byte](16+10*$y/$height)}
-        $writer.Write($row)
-    }
-}finally{$writer.Dispose()}
 
 @'
 Cortex Webcam — نسخة اختبار الجودة
@@ -171,7 +156,7 @@ Cortex Webcam — نسخة اختبار الجودة
 '@ | Set-Content -LiteralPath "$package\ابدأ-هنا.txt" -Encoding utf8
 if($Desktop){
 @'
-Cortex Studio Desktop 0.10.1 — إصلاح استقلال تتبع الجسم والذراعين
+Cortex Studio Desktop 0.10.1 — تثبيت الشخصية أثناء تتبّع الوجه
 
 1) فك ضغط الحزمة بالكامل. لا تنقل EXE وحده.
 2) شغّل CortexStudio.exe مباشرة. هذا التطبيق يفتح واجهة رسومية ومعاينة حية، بلا نافذة أوامر.
@@ -181,7 +166,7 @@ Cortex Studio Desktop 0.10.1 — إصلاح استقلال تتبع الجسم �
 4) عندما يصل الفيديو سيظهر مباشرة داخل PROGRAM PREVIEW، بدون الحاجة إلى OBS أو Zoom.
 إصلاح Avatar في 0.9.8 لا يحتاج تحديث أندرويد إذا كان فيديو الهاتف يصل بالفعل. تحميل الشخصية وتتبعها يعملان على الكمبيوتر. اضغط Cancel loading لإلغاء التحميل، ثم أعد اختيار الشخصية. راجع Avatar-Camera.md للتفاصيل.
 في 0.9.9، فعّل Follow face position لتنتقل الشخصية مع وجهك داخل الكادر. انظر للكاميرا واضغط Set neutral face & position لتحديد مركز الحركة. حركة الشعر تتبع فيزياء موديل الشخصية. تحديث أندرويد غير مطلوب لهذه التحسينات.
-في 0.10.1، تتحدث حركة الجسم والذراعين مستقلة عن نتائج الوجه، فلا تمنع نتيجة وجه مؤجلة تطبيق حركة مفاصل جديدة. لا يحتاج هذا الإصلاح تحديث تطبيق الهاتف. يتوفر نموذج وجه أدق وتتبّع حدقة مستقل، وفلترة تستجيب لسرعة الحركة. Follow camera distance يتابع الاقتراب والابتعاد. Track upper body & arms يفعّل الجسم مع رفع الكتف وثني المرفق بشكل مستقل في Ren. اجعل المفاصل المطلوبة ظاهرة. لا يقيس البرنامج حركة الأصابع ولا يدّعي مطابقة الحركة 100%.
+أثناء تتبّع الكاميرا، تبقى الذراعان والجذع في وضع الراحة. يخفّف Motion smoothing الرجّة الناتجة عن التغيّرات الصغيرة في قياس دوران الرأس وموقعه والمسافة عنه. يتابع Follow camera distance الاقتراب والابتعاد. لا يحتاج هذا التحديث إلى تحديث تطبيق الهاتف.
 اتجاه التصوير يحتاج Cortex Sender 0.6 أو أحدث؛ يدور الفيديو على GPU ويختار 1080×1920 للطولي أو 1920×1080 للعرضي.
 تم اختبار هاتف Samsung S24 Ultra فعلياً: 1920×1080، نحو 59 إطاراً/ثانية في الاستقبال، وصفر أخطاء فك ترميز خلال الاختبار.
 

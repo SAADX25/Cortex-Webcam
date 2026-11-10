@@ -1,10 +1,10 @@
 #pragma once
-#include "cortex/tracking/HumanoidMotion.h"
+#include "cortex/tracking/HandTracker.h"
+#include <chrono>
 #include <cmath>
 
 namespace cortex {
-// Runs once per actual Hands inference, before face-worker publications can
-// repeat that sample. A lone false detection must not wake an occluded arm.
+// Runs once per Hands inference. A lone false detection must not wake an occluded arm.
 class HandVisibilityGate {
     struct State { unsigned count{}; std::chrono::steady_clock::time_point start{},last{}; };
     std::array<State,2> states_{};

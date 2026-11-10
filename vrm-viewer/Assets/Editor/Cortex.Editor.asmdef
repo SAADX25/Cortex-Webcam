@@ -1,5 +1,0 @@
-{
-  "name": "Cortex.Editor",
-  "references": ["Cortex.Vrm", "VRM10", "UniGLTF", "UniGLTF.Utils", "UniHumanoid"],
-  "includePlatforms": ["Editor"]
-}
