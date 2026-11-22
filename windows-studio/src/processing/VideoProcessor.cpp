@@ -89,7 +89,11 @@ struct VideoProcessor::Impl {
                                 uvX,
                                 uvY,
                                 (1 - uvX) * settings.backgroundX,
-                                (1 - uvY) * settings.backgroundY};
+                                (1 - uvY) * settings.backgroundY,
+                                isBackground ? 0.0f : settings.sharpness,
+                                0.0f,
+                                0.0f,
+                                0.0f};
         context->UpdateSubresource(constants.Get(), 0, nullptr, values, 0, 0);
         ID3D11ShaderResourceView* views[] = {image.view.Get(), mask};
         context->PSSetShaderResources(0, 2, views);
@@ -133,7 +137,7 @@ VideoProcessor::VideoProcessor(std::shared_ptr<GpuDevice> gpu, uint32_t width, u
                                                 &s.exportShader),
                "Alpha export shader");
     D3D11_BUFFER_DESC b{};
-    b.ByteWidth = 32;
+    b.ByteWidth = 48;
     b.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
     detail::hr(s.gpu->device->CreateBuffer(&b, nullptr, &s.constants), "Filter parameters");
     D3D11_SAMPLER_DESC sampler{};
@@ -208,10 +212,11 @@ void VideoProcessor::setSettings(const FilterSettings& settings) {
         settings.avatarSmoothing > .3f)
         throw std::invalid_argument("Invalid avatar smoothing");
     if (!std::isfinite(settings.similarity) || !std::isfinite(settings.softness) ||
-        !std::isfinite(settings.spill) || settings.similarity < 0 || settings.similarity > 1 ||
-        settings.softness < 0.001f || settings.softness > 1 || settings.spill < 0 ||
-        settings.spill > 1)
-        throw std::invalid_argument("Invalid chroma key controls");
+        !std::isfinite(settings.spill) || !std::isfinite(settings.sharpness) ||
+        settings.similarity < 0 || settings.similarity > 1 || settings.softness < 0.001f ||
+        settings.softness > 1 || settings.spill < 0 || settings.spill > 1 ||
+        settings.sharpness < 0 || settings.sharpness > 1)
+        throw std::invalid_argument("Invalid filter controls");
     const auto& framing = settings.avatarFraming;
     if (!std::isfinite(framing.scale) || !std::isfinite(framing.x) || !std::isfinite(framing.y) ||
         framing.scale < .25f || framing.scale > 6 || std::abs(framing.x) > 1 ||
@@ -613,9 +618,22 @@ GpuImage VideoProcessor::render(const SceneSnapshot& scene, FramePtr backgroundV
     context->OMSetRenderTargets(0, nullptr, nullptr);
     return s.target;
 }
-GpuImage VideoProcessor::exportFrame(bool preserveAlpha, bool bottomUp) {
+GpuImage VideoProcessor::exportFrame(bool preserveAlpha, bool bottomUp, uint32_t outWidth,
+                                     uint32_t outHeight) {
     auto& s = *impl_;
+    const uint32_t width = outWidth ? outWidth : s.target.width;
+    const uint32_t height = outHeight ? outHeight : s.target.height;
+    if (!width || !height || width > 3840 || height > 3840 ||
+        uint64_t(width) * height > 3840ULL * 2160)
+        throw std::invalid_argument("Invalid export dimensions");
     std::lock_guard lock(s.gpu->mutex);
+    if (s.exported.width != width || s.exported.height != height) {
+        s.exportView.Reset();
+        s.exported = detail::image(*s.gpu, width, height);
+        detail::hr(
+            s.gpu->device->CreateRenderTargetView(s.exported.texture.Get(), nullptr, &s.exportView),
+            "Export target resize");
+    }
     auto* context = s.gpu->context.Get();
     auto* target = s.exportView.Get();
     context->OMSetRenderTargets(1, &target, nullptr);
@@ -627,10 +645,20 @@ GpuImage VideoProcessor::exportFrame(bool preserveAlpha, bool bottomUp) {
     context->VSSetShader(s.vertex.Get(), nullptr, 0);
     auto* sampler = s.sampler.Get();
     context->PSSetSamplers(0, 1, &sampler);
-    D3D11_VIEWPORT viewport{
-        0, 0, static_cast<float>(s.target.width), static_cast<float>(s.target.height), 0, 1};
+    D3D11_VIEWPORT viewport{0, 0, static_cast<float>(width), static_cast<float>(height), 0, 1};
     context->RSSetViewports(1, &viewport);
-    const float values[8] = {bottomUp ? 1.0f : 0.0f, 0, 0, preserveAlpha ? 1.0f : 0.0f};
+    const float values[12] = {bottomUp ? 1.0f : 0.0f,
+                              0,
+                              0,
+                              preserveAlpha ? 1.0f : 0.0f,
+                              static_cast<float>(s.target.width) / static_cast<float>(width),
+                              static_cast<float>(s.target.height) / static_cast<float>(height),
+                              1.0f / static_cast<float>(width),
+                              1.0f / static_cast<float>(height),
+                              0,
+                              0,
+                              0,
+                              0};
     context->UpdateSubresource(s.constants.Get(), 0, nullptr, values, 0, 0);
     auto* buffer = s.constants.Get();
     context->PSSetConstantBuffers(0, 1, &buffer);

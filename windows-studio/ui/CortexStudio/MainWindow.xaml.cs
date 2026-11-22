@@ -62,7 +62,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private int _displayMode = -1, _displayFps = -1;
+    private int _displayMode = -1, _displayFps = -1, _virtualResolution = 720;
     private string _avatarModelPath = "";
     private bool _loadingAvatarChoices;
     private int _avatarLoadRequest;
@@ -211,6 +211,9 @@ public partial class MainWindow : Window
 
         SelectMode(_initialMode);
         SelectFps(_initialFps);
+        SelectVirtualResolution(_virtualResolution);
+        PreviewHost.Set(34, SharpnessSlider.Value / 100.0);
+        PreviewHost.Set(35, _virtualResolution);
 
         _timer.Start();
         Poll(null, EventArgs.Empty);
@@ -777,6 +780,39 @@ public partial class MainWindow : Window
     {
         PreviewHost.Set(14, 60);
         SelectFps(60);
+    }
+
+    private void SelectVirtualResolution(int height)
+    {
+        _virtualResolution = height <= 720 ? 720 : 1080;
+        if (Res720Button is not null)
+            Res720Button.Style = (Style)FindResource(_virtualResolution == 720 ? "Selected" : "ButtonBase");
+        if (Res1080Button is not null)
+            Res1080Button.Style = (Style)FindResource(_virtualResolution == 1080 ? "Selected" : "ButtonBase");
+        if (VirtualResolutionStatus is not null)
+            VirtualResolutionStatus.Text = _virtualResolution == 720
+                ? "GPU-filtered 720p matches Discord natively without CPU blur."
+                : "Full 1080p output for OBS, Zoom or 1080p capture.";
+    }
+
+    private void Res720Click(object sender, RoutedEventArgs e)
+    {
+        SelectVirtualResolution(720);
+        PreviewHost.Set(35, 720);
+    }
+
+    private void Res1080Click(object sender, RoutedEventArgs e)
+    {
+        SelectVirtualResolution(1080);
+        PreviewHost.Set(35, 1080);
+    }
+
+    private void SharpnessChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (SharpnessValueLabel is not null)
+            SharpnessValueLabel.Text = $"{Math.Round(e.NewValue):0}%";
+        if (_initialized && PreviewHost is not null)
+            PreviewHost.Set(34, e.NewValue / 100.0);
     }
 
     private void ImageClick(object sender, RoutedEventArgs e) => ChooseBackground(false);

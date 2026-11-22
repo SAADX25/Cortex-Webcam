@@ -7,6 +7,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.locks.LockSupport
 import kotlin.concurrent.thread
 
 /** Owns compressed data only. Never receives a raw camera frame. */
@@ -19,7 +20,7 @@ class UdpStreamer(
     private val orientation: () -> Int = { 0 },
 ) : Closeable {
     private data class AccessUnit(val nals: List<ByteArray>, val ptsUs: Long, val rotation: Int)
-    private val queue = ArrayBlockingQueue<AccessUnit>(6)
+    private val queue = ArrayBlockingQueue<AccessUnit>(8)
     private val running = AtomicBoolean(true)
     private val socket = DatagramSocket()
     private var waitingForIdr = true
@@ -34,15 +35,18 @@ class UdpStreamer(
             socket.sendBufferSize = 2 * 1024 * 1024
             worker = thread(name = "rtp-udp-send") {
                 val rtp = H264Rtp()
+                val burst = ArrayList<ByteArray>(64)
                 try {
                     while (running.get()) {
                         val unit = queue.take()
-                        var packetCount = 0
-                        rtp.packetize(unit.nals, unit.ptsUs, unit.rotation) { bytes ->
+                        burst.clear()
+                        rtp.packetize(unit.nals, unit.ptsUs, unit.rotation) { bytes -> burst.add(bytes) }
+                        val paceLargeFrame = burst.size > 16
+                        for (i in burst.indices) {
+                            val bytes = burst[i]
                             socket.send(DatagramPacket(bytes, bytes.size))
-                            packetCount++
-                            if (packetCount % 8 == 0) {
-                                Thread.yield()
+                            if (paceLargeFrame && (i + 1) % 6 == 0) {
+                                LockSupport.parkNanos(250_000L)
                             }
                         }
                     }

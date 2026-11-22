@@ -45,7 +45,7 @@ class StudioDiscovery(context: Context,
     private var frameRateRevision = 0
     private var acknowledgedCommand = 0L
     private var selectedSync: Boolean? = null
-    private var bitrateCbr = true
+    private var bitrateCbr = false
     private var manualHost = ""
     private var controlPort = 5005
     private var rememberedHost = ""

@@ -262,6 +262,19 @@ int main(int argc, char** argv) {
         auto topDown = read(gpu, processor.exportFrame());
         check(topDown[top] > 220 && topDown[bottom + 2] > 220,
               "Default exports must retain top-down orientation");
+        auto downscaled = processor.exportFrame(false, true, 32, 32);
+        auto downscaledPixels = read(gpu, downscaled);
+        check(downscaled.width == 32 && downscaled.height == 32 &&
+                  downscaledPixels[(8 * 32 + 16) * 4 + 2] > 220 &&
+                  downscaledPixels[(24 * 32 + 16) * 4] > 220,
+              "GPU downscaled export must resize cleanly and keep bottom-up DirectShow rows");
+        settings.sharpness = 1.5f;
+        bool rejectedSharpness = false;
+        try { processor.setSettings(settings); }
+        catch (const std::invalid_argument&) { rejectedSharpness = true; }
+        check(rejectedSharpness, "Out-of-range sharpness must be rejected");
+        settings.sharpness = 0.45f;
+        processor.setSettings(settings);
         UnityCameraOutput output(gpu, 40);
         std::atomic<bool> received = false;
         // Webcam clients negotiate their own capture resolution. Require the resize

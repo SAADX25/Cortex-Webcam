@@ -54,7 +54,23 @@ public:
             R"(Texture2D<float4> Frame:register(t0);SamplerState Clamp:register(s0);
 struct V{float4 p:SV_POSITION;float2 uv:TEXCOORD0;};
 V VS(uint id:SV_VertexID){V v;v.uv=float2((id<<1)&2,id&2);v.p=float4(v.uv.x*2-1,1-v.uv.y*2,0,1);return v;}
-float4 PS(V v):SV_TARGET {float4 c=Frame.Sample(Clamp,v.uv);uint2 p=uint2(v.p.xy)/16;float bg=((p.x+p.y)&1)?0.105:0.075;return float4(c.rgb+bg*(1-c.a),1);})";
+float4 PS(V v):SV_TARGET {
+    uint w=1,h=1; Frame.GetDimensions(w,h);
+    float2 texSize=float2(max(w,1u),max(h,1u));
+    float2 dx=ddx(v.uv), dy=ddy(v.uv);
+    float scale=max(length(dx*texSize),length(dy*texSize));
+    float4 c;
+    if(scale>1.15){
+        float2 du=dx*0.25, dv=dy*0.25;
+        c=0.25*(Frame.Sample(Clamp,v.uv-du-dv)+Frame.Sample(Clamp,v.uv+du-dv)+
+                Frame.Sample(Clamp,v.uv-du+dv)+Frame.Sample(Clamp,v.uv+du+dv));
+    }else{
+        c=Frame.Sample(Clamp,v.uv);
+    }
+    uint2 p=uint2(v.p.xy)/16;
+    float bg=((p.x+p.y)&1)?0.105:0.075;
+    return float4(c.rgb+bg*(1-c.a),1);
+})";
         std::lock_guard lock(gpu->mutex);
         auto compile = [&](const char* entry, const char* version) {
             ComPtr<ID3DBlob> code, error;
@@ -161,7 +177,8 @@ struct Controls {
     int fps = 30, mode = 0, backgroundKind = 0, videoPort = 5004, controlPort = 5005;
     float backgroundZoom = 1, backgroundX = .5f, backgroundY = .5f;
     bool backgroundFit = false;
-    float similarity = .13f, softness = .10f, spill = .8f;
+    float similarity = .13f, softness = .10f, spill = .8f, sharpness = .45f;
+    int virtualResolution = 1080;
     bool transparent = false;
     std::filesystem::path background, model;
     uint64_t revision = 1, reconnect = 0;
@@ -323,6 +340,7 @@ class Engine {
                     filter.similarity = current.similarity;
                     filter.softness = current.softness;
                     filter.spill = current.spill;
+                    filter.sharpness = current.sharpness;
                     filter.transparent = current.transparent;
                     processor.setSettings(filter);
                     applied = current;
@@ -504,8 +522,15 @@ class Engine {
                 const bool hasVisual = current.avatarEnabled || !scene.layers.empty() || hasMedia;
                 if (hasVisual)
                     preview.present(rendered);
-                if (output)
-                    output->submit(processor.exportFrame(false, true));
+                if (output) {
+                    uint32_t exportW = 0, exportH = 0;
+                    if (current.virtualResolution == 720 && rendered.width && rendered.height) {
+                        const bool portrait = rendered.height > rendered.width;
+                        exportW = portrait ? 720 : 1280;
+                        exportH = portrait ? 1280 : 720;
+                    }
+                    output->submit(processor.exportFrame(false, true, exportW, exportH));
+                }
                 const auto now = Clock::now();
                 if (now - metricTime >= std::chrono::seconds(1)) {
                     measuredFps = double(source.decodedFrames - lastFrames) /
@@ -711,6 +736,12 @@ public:
             break;
         case CortexAvatarFollowDistance:
             controls.avatarFollowDistance = value != 0;
+            break;
+        case CortexCameraSharpness:
+            controls.sharpness = static_cast<float>(std::clamp(value, 0.0, 1.0));
+            break;
+        case CortexVirtualResolution:
+            controls.virtualResolution = value <= 720.0 ? 720 : 1080;
             break;
         case 18:
             controls.backgroundFit = value != 0;

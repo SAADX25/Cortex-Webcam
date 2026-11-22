@@ -12,6 +12,7 @@ enum class RemovalMode { None, ChromaKey, AiMatting, BackgroundOnly };
 struct FilterSettings {
     RemovalMode removal{RemovalMode::ChromaKey};
     float similarity{0.13f}, softness{0.10f}, spill{0.8f};
+    float sharpness{0.45f};
     bool transparent{false};
     bool avatarEnabled{}, avatarTestMotion{};
     int avatarMotion{-1}, avatarExpression{-1};
@@ -41,8 +42,10 @@ public:
     setMattingModel(const std::filesystem::path&);  // One independent recurrent state per source.
     GpuImage render(const SceneSnapshot&, FramePtr backgroundVideo = {});
     // UnityCapture consumes bottom-up RGBA; preview and other exports stay top-down.
-    GpuImage exportFrame(bool preserveAlpha = false,
-                         bool bottomUp = false);  // Straight RGBA or flattened opaque black.
+    // Optional outWidth/outHeight enable GPU-filtered downscaling for webcam clients.
+    GpuImage exportFrame(bool preserveAlpha = false, bool bottomUp = false,
+                         uint32_t outWidth = 0,
+                         uint32_t outHeight = 0);  // Straight RGBA or flattened opaque black.
     const FilterSettings& settings() const;
     std::string avatarTrackingStatus() const;
 

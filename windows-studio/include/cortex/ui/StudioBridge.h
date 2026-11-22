@@ -29,7 +29,9 @@ enum CortexAvatarControl {
     CortexAvatarArms = 30,  // Reserved for older Desktop builds.
     CortexAvatarMirror = 31,
     CortexAvatarFollowPosition = 32,
-    CortexAvatarFollowDistance = 33
+    CortexAvatarFollowDistance = 33,
+    CortexCameraSharpness = 34,
+    CortexVirtualResolution = 35
 };
 extern "C" {
 #ifdef CORTEX_STUDIO_NATIVE_BUILD

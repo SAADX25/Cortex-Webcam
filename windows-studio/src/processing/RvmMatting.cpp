@@ -8,7 +8,7 @@
 #include <dxgi1_2.h>
 namespace cortex {
 struct RvmMatting::Impl {
-    static constexpr UINT Width = 512, Height = 288, Count = Width * Height * 3;
+    static constexpr UINT Width = 1024, Height = 576, Count = Width * Height * 3;
     std::shared_ptr<GpuDevice> gpu;
     Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "cortex-rvm"};
     Ort::Session session{nullptr};
@@ -21,7 +21,7 @@ struct RvmMatting::Impl {
     ComPtr<ID3D11SamplerState> sampler;
     GpuImage mask;
     std::vector<float> input = std::vector<float>(Count);
-    float zero = 0, ratio = 1;
+    float zero = 0, ratio = 0.5f;
 };
 RvmMatting::RvmMatting(std::shared_ptr<GpuDevice> gpu, const std::filesystem::path& path)
     : impl_(std::make_unique<Impl>()) {
@@ -123,7 +123,7 @@ ComPtr<ID3D11ShaderResourceView> RvmMatting::infer(const GpuImage& image) {
         s.gpu->context->CSSetShaderResources(0, 1, &srv);
         s.gpu->context->CSSetSamplers(0, 1, &sampler);
         s.gpu->context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-        s.gpu->context->Dispatch(32, 18, 1);
+        s.gpu->context->Dispatch(Impl::Width / 16, Impl::Height / 16, 1);
         srv = nullptr;
         uav = nullptr;
         s.gpu->context->CSSetShaderResources(0, 1, &srv);

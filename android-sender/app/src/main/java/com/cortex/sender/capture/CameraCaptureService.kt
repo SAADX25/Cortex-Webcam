@@ -174,7 +174,7 @@ class CameraCaptureService : Service() {
         discovery.setFrameRate(value)
         cameraHandler.post {
             val settings = requestedConfig ?: config ?: return@post
-            if (isActive) restartPipeline(settings.copy(fps = value, bitrate = if(value == 60) 16_000_000 else 12_000_000))
+            if (isActive) restartPipeline(settings.copy(fps = value, bitrate = StreamConfig.defaultBitrate(value)))
         }
     }
     private fun restartPipeline(settings: StreamConfig) {
@@ -326,7 +326,7 @@ class CameraCaptureService : Service() {
             if (id != null) {
                 val range = manager.getCameraCharacteristics(id).get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)!!
                     .filter { it.upper == rate }.maxBy { it.lower }
-                return Selection(id,settings.copy(fps=rate),range)
+                return Selection(id, settings.copy(fps = rate, bitrate = StreamConfig.defaultBitrate(rate)), range)
             }
         }
         error("${if(front) "Front" else "Back"} camera does not support 1080p at 30/60 fps")
@@ -369,14 +369,38 @@ class CameraCaptureService : Service() {
         val activeSession = session ?: return
         val input = encoder?.inputSurface ?: return
         try {
+            val characteristics = getSystemService(CameraManager::class.java).getCameraCharacteristics(device.id)
+            val highFps = actualFps >= 60
             val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(input)
                 if (!powerSaver && preview?.isValid == true) gpuPreview?.cameraSurface?.let { addTarget(it) }
+                set(CaptureRequest.CONTROL_MODE, CaptureRequest.CONTROL_MODE_AUTO)
+                set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
                 set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, aeRange)
                 set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
-                if(Build.VERSION.SDK_INT >= 31) set(CaptureRequest.SCALER_ROTATE_AND_CROP, CaptureRequest.SCALER_ROTATE_AND_CROP_NONE)
-                val modes = getSystemService(CameraManager::class.java).getCameraCharacteristics(device.id)
-                    .get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+                if (Build.VERSION.SDK_INT >= 31)
+                    set(CaptureRequest.SCALER_ROTATE_AND_CROP, CaptureRequest.SCALER_ROTATE_AND_CROP_NONE)
+                // Disable digital video stabilization (EIS) so the ISP never crops and digitally upscales the webcam image.
+                set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
+                val oisModes = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
+                if (oisModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON))
+                    set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)
+                val antibanding = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES) ?: intArrayOf()
+                if (antibanding.contains(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO))
+                    set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+                val nrModes = characteristics.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES) ?: intArrayOf()
+                val preferredNr = if (highFps) CaptureRequest.NOISE_REDUCTION_MODE_FAST else CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY
+                if (nrModes.contains(preferredNr))
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, preferredNr)
+                else if (nrModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST))
+                    set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
+                val edgeModes = characteristics.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES) ?: intArrayOf()
+                val preferredEdge = if (highFps) CaptureRequest.EDGE_MODE_FAST else CaptureRequest.EDGE_MODE_HIGH_QUALITY
+                if (edgeModes.contains(preferredEdge))
+                    set(CaptureRequest.EDGE_MODE, preferredEdge)
+                else if (edgeModes.contains(CaptureRequest.EDGE_MODE_FAST))
+                    set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
+                val modes = characteristics.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
                 if (modes.contains(CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO))
                     set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
             }.build()

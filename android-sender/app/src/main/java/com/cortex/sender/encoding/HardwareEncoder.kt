@@ -33,45 +33,59 @@ class HardwareEncoder(
         var surface: Surface? = null
         val failures = mutableListOf<String>()
         for (info in candidates) {
-            var attempt: MediaCodec? = null
-            try {
-                val caps = info.getCapabilitiesForType("video/avc")
-                require(caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface))
-                require(caps.videoCapabilities.areSizeAndRateSupported(config.width, config.height, config.fps.toDouble()))
-                require(caps.videoCapabilities.bitrateRange.contains(config.bitrate))
-                val profile = listOf(MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline,
-                    MediaCodecInfo.CodecProfileLevel.AVCProfileMain).firstOrNull { preferredProfile ->
-                    caps.profileLevels.any { it.profile == preferredProfile }
-                } ?: error("A GPU-compatible Constrained Baseline or Main profile is required")
-                val preferred = if (config.preferCbr) MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR else MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
-                val alternate = if (config.preferCbr) MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR else MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
-                val mode = listOf(preferred, alternate).firstOrNull { caps.encoderCapabilities.isBitrateModeSupported(it) }
-                    ?: error("Neither CBR nor VBR is supported")
-                val format = MediaFormat.createVideoFormat("video/avc", config.width, config.height).apply {
-                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                    setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
-                    setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
-                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-                    setInteger(MediaFormat.KEY_BITRATE_MODE, mode)
-                    setInteger(MediaFormat.KEY_PROFILE, profile)
-                    setInteger(MediaFormat.KEY_LEVEL, if (config.fps == 60) MediaCodecInfo.CodecProfileLevel.AVCLevel42 else MediaCodecInfo.CodecProfileLevel.AVCLevel41)
-                    setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-                    setInteger(MediaFormat.KEY_LATENCY, 0)
-                    setInteger(MediaFormat.KEY_PRIORITY, 0)
-                    setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
-                    setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
-                    setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
-                    setFloat(MediaFormat.KEY_OPERATING_RATE, config.fps.toFloat())
-                }
-                attempt = MediaCodec.createByCodecName(info.name)
-                attempt.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                surface = attempt.createInputSurface()
-                selected = attempt
-                break
-            } catch (e: Exception) {
-                runCatching { attempt?.release() }
-                failures += "${info.name}: ${e.message}"
+            val caps = runCatching { info.getCapabilitiesForType("video/avc") }.getOrNull() ?: continue
+            if (!caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface) ||
+                !caps.videoCapabilities.areSizeAndRateSupported(config.width, config.height, config.fps.toDouble()) ||
+                !caps.videoCapabilities.bitrateRange.contains(config.bitrate)) {
+                failures += "${info.name}: unsupported surface/size/rate/bitrate"
+                continue
             }
+            val profiles = listOf(
+                MediaCodecInfo.CodecProfileLevel.AVCProfileHigh,
+                MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
+                MediaCodecInfo.CodecProfileLevel.AVCProfileConstrainedBaseline,
+            ).filter { preferredProfile -> caps.profileLevels.any { it.profile == preferredProfile } }
+            if (profiles.isEmpty()) {
+                failures += "${info.name}: no GPU-compatible AVC profile"
+                continue
+            }
+            val preferred = if (config.preferCbr) MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR else MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR
+            val alternate = if (config.preferCbr) MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR else MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR
+            val mode = listOf(preferred, alternate).firstOrNull { caps.encoderCapabilities.isBitrateModeSupported(it) }
+            if (mode == null) {
+                failures += "${info.name}: neither CBR nor VBR supported"
+                continue
+            }
+            for (profile in profiles) {
+                var attempt: MediaCodec? = null
+                try {
+                    val format = MediaFormat.createVideoFormat("video/avc", config.width, config.height).apply {
+                        setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                        setInteger(MediaFormat.KEY_BIT_RATE, config.bitrate)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, config.fps)
+                        setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 2)
+                        setInteger(MediaFormat.KEY_BITRATE_MODE, mode)
+                        setInteger(MediaFormat.KEY_PROFILE, profile)
+                        setInteger(MediaFormat.KEY_LEVEL, if (config.fps == 60) MediaCodecInfo.CodecProfileLevel.AVCLevel42 else MediaCodecInfo.CodecProfileLevel.AVCLevel41)
+                        setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
+                        setInteger(MediaFormat.KEY_LATENCY, 1)
+                        setInteger(MediaFormat.KEY_PRIORITY, 0)
+                        setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709)
+                        setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                        setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                        setFloat(MediaFormat.KEY_OPERATING_RATE, config.fps.toFloat())
+                    }
+                    attempt = MediaCodec.createByCodecName(info.name)
+                    attempt.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    surface = attempt.createInputSurface()
+                    selected = attempt
+                    break
+                } catch (e: Exception) {
+                    runCatching { attempt?.release() }
+                    failures += "${info.name}(profile=$profile): ${e.message}"
+                }
+            }
+            if (selected != null) break
         }
         codec = selected ?: error("No hardware AVC encoder supports this configuration. ${failures.joinToString()}")
         inputSurface = checkNotNull(surface)

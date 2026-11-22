@@ -29,7 +29,7 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     private var pending: StreamConfig? = null
     private var permissionPending = false
     private var rate = 30
-    private var cbr = true
+    private var cbr = false
     private var target = ""
     private var controlPort = 5005
     private var orientationMode = 0
@@ -96,9 +96,9 @@ class MainActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getPreferences(0)
-        // Migrate old builds which persisted auto-connect=false after a manual start.
-        if (prefs.getInt("uiVersion", 0) < 3) prefs.edit().putInt("uiVersion", 3).putBoolean("automatic", true).apply()
-        rate = prefs.getInt("rate", 30); cbr = prefs.getBoolean("cbr", true)
+        // Migrate old builds to auto-connect and VBR default for sharper video quality.
+        if (prefs.getInt("uiVersion", 0) < 4) prefs.edit().putInt("uiVersion", 4).putBoolean("automatic", true).putBoolean("cbr", false).apply()
+        rate = prefs.getInt("rate", 30); cbr = prefs.getBoolean("cbr", false)
         orientationMode = prefs.getInt("orientationMode", 0)
         if(Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !prefs.getBoolean("notificationAsked",false)){
             prefs.edit().putBoolean("notificationAsked",true).apply()
